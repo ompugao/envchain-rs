@@ -1,6 +1,6 @@
 # envchain-rs
 
-A Rust port of [sorah/envchain](https://github.com/sorah/envchain) — set environment variables with D-Bus secret service (Linux).
+A Rust port of [sorah/envchain](https://github.com/sorah/envchain) — set environment variables with D-Bus secret service (Linux) or age-encrypted files.
 
 ## What?
 
@@ -10,16 +10,24 @@ A common practice is to set them in shell initialization files such as `.bashrc`
 
 `envchain` allows you to securely store credential environment variables in your system's secret vault, and set them as environment variables only when explicitly requested.
 
-This Rust implementation supports **Linux only** via D-Bus Secret Service (gnome-keyring, KeePassXC, etc.).
+This Rust implementation supports **Linux** via:
+- **D-Bus Secret Service** (gnome-keyring, KeePassXC, etc.) - default
+- **Age encryption** - portable, works without D-Bus (ideal for WSL, headless servers)
 
 > For macOS Keychain support, use the original [envchain](https://github.com/sorah/envchain).
 
-## Requirements (Linux)
+## Requirements
 
+### D-Bus Secret Service Backend (default)
 - D-Bus Secret Service compatible backend:
   - GNOME Keyring
   - KeePassXC
   - KDE Wallet (with Secret Service integration)
+
+### Age Backend (portable)
+- No external dependencies required
+- Supports SSH keys (Ed25519, RSA) or native age identities
+- Works in WSL, headless servers, containers
 
 ## Installation
 
@@ -30,6 +38,16 @@ cargo build --release
 cp target/release/envchain ~/.local/bin/
 # or
 sudo cp target/release/envchain /usr/local/bin/
+```
+
+### Feature Flags
+
+```bash
+# Build with only age backend (no D-Bus dependency)
+cargo build --release --no-default-features --features age-backend
+
+# Build with only secret-service backend
+cargo build --release --no-default-features --features secret-service-backend
 ```
 
 ## Usage
@@ -126,13 +144,86 @@ Remove variables from a namespace:
 envchain --unset aws AWS_ACCESS_KEY_ID
 ```
 
+### Backend Selection
+
+#### `--backend <type>`
+
+Select the storage backend:
+- `secret-service` (default) - D-Bus Secret Service
+- `age` - Age-encrypted file storage
+
+```bash
+# Use age backend
+envchain --backend age --set aws AWS_ACCESS_KEY_ID
+
+# Use secret-service backend explicitly
+envchain --backend secret-service --set aws AWS_ACCESS_KEY_ID
+```
+
+#### `--age-identity <path>`
+
+Specify the age identity file (SSH private key or age identity):
+
+```bash
+envchain --backend age --age-identity ~/.ssh/id_ed25519 --set aws AWS_ACCESS_KEY_ID
+```
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `ENVCHAIN_BACKEND` | Default backend (`secret-service` or `age`) |
+| `ENVCHAIN_AGE_IDENTITY` | Path to age identity file for age backend |
+
+## Age Backend Details
+
+The age backend stores secrets in `~/.config/envchain/secrets.age` encrypted with [age](https://age-encryption.org/).
+
+### Using SSH Keys
+
+You can use your existing SSH keys:
+
+```bash
+# Use existing SSH key
+export ENVCHAIN_BACKEND=age
+export ENVCHAIN_AGE_IDENTITY=~/.ssh/id_ed25519
+
+envchain --set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+envchain aws aws s3 ls
+```
+
+Or generate a dedicated key:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/envchain_key -N ""
+export ENVCHAIN_AGE_IDENTITY=~/.ssh/envchain_key
+```
+
+### Using Native Age Identity
+
+If no identity is specified, a native age identity is auto-generated at `~/.config/envchain/identity.txt`.
+
+```bash
+export ENVCHAIN_BACKEND=age
+envchain --set aws AWS_ACCESS_KEY_ID  # Auto-generates identity on first use
+```
+
+### Passphrase Handling
+
+**Important**: The age crate does not support ssh-agent. If your SSH key has a passphrase:
+- You'll be prompted for the passphrase each time
+- Consider using an unencrypted SSH key dedicated to envchain
+- Or use a native age identity (no passphrase by default)
+
 ## Differences from original envchain
 
-- **Linux only**: This Rust port only supports D-Bus Secret Service. For macOS, use the original C implementation.
+- **Linux only**: This Rust port supports D-Bus Secret Service and age backends. For macOS, use the original C implementation.
 - **Additional features**:
   - `--unset` to remove stored variables
   - `--list NAMESPACE` to list variables within a namespace
   - `--list --show-value NAMESPACE` to display variable values
+  - `--backend` to select storage backend
+  - Age backend for portable, D-Bus-free operation
 
 ## Credits
 

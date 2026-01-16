@@ -1,9 +1,56 @@
+mod backend;
+
+use backend::Backend;
 use rpassword::read_password;
-use secret_service::blocking::{Collection, Item, SecretService};
-use secret_service::EncryptionType;
-use std::collections::HashMap;
 use std::env;
+use std::path::PathBuf;
 use std::process::Command;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendType {
+    #[cfg(feature = "secret-service-backend")]
+    SecretService,
+    #[cfg(feature = "age-backend")]
+    Age,
+}
+
+impl BackendType {
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            #[cfg(feature = "secret-service-backend")]
+            "secret-service" | "secretservice" | "dbus" => Some(Self::SecretService),
+            #[cfg(feature = "age-backend")]
+            "age" | "file" => Some(Self::Age),
+            _ => None,
+        }
+    }
+
+    fn default() -> Self {
+        // Prefer secret-service if available, fallback to age
+        #[cfg(feature = "secret-service-backend")]
+        {
+            Self::SecretService
+        }
+        #[cfg(all(not(feature = "secret-service-backend"), feature = "age-backend"))]
+        {
+            Self::Age
+        }
+    }
+}
+
+fn create_backend(
+    backend_type: BackendType,
+    #[allow(unused_variables)] age_identity: Option<PathBuf>,
+) -> Result<Box<dyn Backend>, String> {
+    match backend_type {
+        #[cfg(feature = "secret-service-backend")]
+        BackendType::SecretService => {
+            Ok(Box::new(backend::secret_service::SecretServiceBackend::new()?))
+        }
+        #[cfg(feature = "age-backend")]
+        BackendType::Age => Ok(Box::new(backend::age::AgeBackend::new(age_identity)?)),
+    }
+}
 
 fn print_help(prog: &str) {
     eprintln!(
@@ -18,51 +65,30 @@ Usage:
     {prog} --list
   Remove variables
     {prog} --unset NAMESPACE ENV [ENV ..]
+
+Backend options:
+  --backend <type>       Backend type: 'secret-service' (default) or 'age'
+  --age-identity <path>  Path to age identity file (SSH key or age identity)
+                         Can also be set via ENVCHAIN_AGE_IDENTITY env var
+
+Environment variables:
+  ENVCHAIN_BACKEND       Default backend ('secret-service' or 'age')
+  ENVCHAIN_AGE_IDENTITY  Path to age identity file for age backend
 "
     );
 }
 
-fn get_service() -> Result<SecretService<'static>, String> {
-    SecretService::connect(EncryptionType::Dh)
-        .map_err(|e| format!("SecretService connect failed: {e}"))
-}
-
-fn get_collection<'a>(
-    ss: &'a SecretService<'a>,
-) -> Result<Collection<'a>, String> {
-    ss.get_default_collection()
-        .map_err(|e| format!("SecretService default collection failed: {e}"))
-}
-
-fn list_namespaces() -> Result<(), String> {
-    let ss = get_service()?;
-    let collection = get_collection(&ss)?;
-    let items: Vec<Item> = collection
-        .search_items(HashMap::new())
-        .map_err(|e| format!("search_items failed: {e}"))?;
-
-    let mut namespaces: Vec<String> = items
-        .into_iter()
-        .filter_map(|item| {
-            let attrs = item.get_attributes().ok()?;
-            attrs.get("name").cloned()
-        })
-        .collect();
-    namespaces.sort();
-    namespaces.dedup();
+fn list_namespaces(backend: &dyn Backend) -> Result<(), String> {
+    let namespaces = backend.list_namespaces()?;
     for ns in namespaces {
         println!("{ns}");
     }
     Ok(())
 }
 
-fn list_values(target: &str, show_value: bool) -> Result<(), String> {
-    let ss = get_service()?;
-    let collection = get_collection(&ss)?;
-    let items: Vec<Item> = collection
-        .search_items(HashMap::from([("name", target)]))
-        .map_err(|e| format!("search_items failed: {e}"))?;
-    if items.is_empty() {
+fn list_values(backend: &dyn Backend, target: &str, show_value: bool) -> Result<(), String> {
+    let secrets = backend.list_secrets(target)?;
+    if secrets.is_empty() {
         eprintln!(
             "WARNING: namespace `{}` not defined.\n         You can set via running `{} --set {} SOME_ENV_NAME`.\n",
             target,
@@ -71,22 +97,11 @@ fn list_values(target: &str, show_value: bool) -> Result<(), String> {
         );
         return Ok(());
     }
-    for item in items {
-        let attrs = match item.get_attributes() {
-            Ok(a) => a,
-            Err(_) => continue,
-        };
-        let Some(key) = attrs.get("key") else {
-            continue;
-        };
+    let mut keys: Vec<_> = secrets.keys().collect();
+    keys.sort();
+    for key in keys {
         if show_value {
-            match item.get_secret() {
-                Ok(secret) => {
-                    let val = String::from_utf8_lossy(&secret).to_string();
-                    println!("{key}={val}");
-                }
-                Err(_) => println!("{key}=<unavailable>"),
-            }
+            println!("{}={}", key, secrets.get(key).unwrap());
         } else {
             println!("{key}");
         }
@@ -94,9 +109,7 @@ fn list_values(target: &str, show_value: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn set_values(noecho: bool, name: &str, keys: &[String]) -> Result<(), String> {
-    let ss = get_service()?;
-    let collection = get_collection(&ss)?;
+fn set_values(backend: &mut dyn Backend, noecho: bool, name: &str, keys: &[String]) -> Result<(), String> {
     for key in keys {
         let prompt = format!("{name}.{key}");
         let value = if noecho {
@@ -110,56 +123,25 @@ fn set_values(noecho: bool, name: &str, keys: &[String]) -> Result<(), String> {
                 .map_err(|e| format!("Failed to read line: {e}"))?;
             buf.trim_end_matches(['\n', '\r']).to_string()
         };
-        collection
-            .create_item(
-                key,
-                HashMap::from([("name", name), ("key", key.as_str())]),
-                value.as_bytes(),
-                true,
-                "text/plain",
-            )
-            .map_err(|e| format!("Failed to store secret: {e}"))?;
+        backend.set_secret(name, key, &value)?;
     }
     Ok(())
 }
 
-fn unset_values(name: &str, keys: &[String]) -> Result<(), String> {
-    let ss = get_service()?;
-    let collection = get_collection(&ss)?;
+fn unset_values(backend: &mut dyn Backend, name: &str, keys: &[String]) -> Result<(), String> {
     for key in keys {
-        let items: Vec<Item> = collection
-            .search_items(HashMap::from([("name", name), ("key", key.as_str())]))
-            .map_err(|e| format!("search_items failed: {e}"))?;
-        for item in items {
-            if let Err(e) = item.delete() {
-                eprintln!("Failed to delete {name}.{key}: {e}");
-            }
-        }
+        backend.delete_secret(name, key)?;
     }
     Ok(())
 }
 
-fn exec_with(name_csv: &str, cmd: &str, args: &[String]) -> Result<(), String> {
-    let ss = get_service()?;
-    let collection = get_collection(&ss)?;
+fn exec_with(backend: &dyn Backend, name_csv: &str, cmd: &str, args: &[String]) -> Result<(), String> {
     for name in name_csv.split(',') {
-        let items: Vec<Item> = collection
-            .search_items(HashMap::from([("name", name)]))
-            .map_err(|e| format!("search_items failed: {e}"))?;
-        for item in items {
-            let attrs = match item.get_attributes() {
-                Ok(a) => a,
-                Err(_) => continue,
-            };
-            let Some(key) = attrs.get("key") else {
-                continue;
-            };
-            if let Ok(secret) = item.get_secret() {
-                let val = String::from_utf8_lossy(&secret).to_string();
-                // SAFETY: We are the only thread running at this point before exec,
-                // and we're about to replace this process with exec anyway.
-                unsafe { env::set_var(key, val) };
-            }
+        let secrets = backend.list_secrets(name)?;
+        for (key, val) in secrets {
+            // SAFETY: We are the only thread running at this point before exec,
+            // and we're about to replace this process with exec anyway.
+            unsafe { env::set_var(&key, val) };
         }
     }
     let status = Command::new(cmd)
@@ -176,6 +158,61 @@ fn main() {
         print_help(&prog);
         std::process::exit(2);
     }
+
+    // Parse global options first
+    let mut backend_type = env::var("ENVCHAIN_BACKEND")
+        .ok()
+        .and_then(|s| BackendType::from_str(&s))
+        .unwrap_or_else(BackendType::default);
+    let mut age_identity: Option<PathBuf> = None;
+
+    // Extract global options
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--help" | "-h" => {
+                print_help(&prog);
+                std::process::exit(0);
+            }
+            "--backend" => {
+                args.remove(i);
+                if i >= args.len() {
+                    eprintln!("--backend requires an argument");
+                    std::process::exit(2);
+                }
+                let backend_str = args.remove(i);
+                backend_type = BackendType::from_str(&backend_str).unwrap_or_else(|| {
+                    eprintln!("Unknown backend: {backend_str}");
+                    eprintln!("Available: secret-service, age");
+                    std::process::exit(2);
+                });
+            }
+            "--age-identity" => {
+                args.remove(i);
+                if i >= args.len() {
+                    eprintln!("--age-identity requires an argument");
+                    std::process::exit(2);
+                }
+                age_identity = Some(PathBuf::from(args.remove(i)));
+            }
+            _ => i += 1,
+        }
+    }
+
+    if args.is_empty() {
+        print_help(&prog);
+        std::process::exit(2);
+    }
+
+    // Create backend
+    let mut backend = match create_backend(backend_type, age_identity) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
     match args[0].as_str() {
         "--set" | "-s" => {
             args.remove(0);
@@ -194,7 +231,7 @@ fn main() {
                 std::process::exit(2);
             }
             let name = args.remove(0);
-            if let Err(e) = set_values(noecho, &name, &args) {
+            if let Err(e) = set_values(backend.as_mut(), noecho, &name, &args) {
                 eprintln!("{e}");
                 std::process::exit(1);
             }
@@ -212,12 +249,12 @@ fn main() {
                 }
             }
             let res = if let Some(t) = target {
-                list_values(&t, show_value)
+                list_values(backend.as_ref(), &t, show_value)
             } else if show_value {
                 print_help(&prog);
                 std::process::exit(2);
             } else {
-                list_namespaces()
+                list_namespaces(backend.as_ref())
             };
             if let Err(e) = res {
                 eprintln!("{e}");
@@ -231,7 +268,7 @@ fn main() {
                 std::process::exit(2);
             }
             let name = args.remove(0);
-            if let Err(e) = unset_values(&name, &args) {
+            if let Err(e) = unset_values(backend.as_mut(), &name, &args) {
                 eprintln!("{e}");
                 std::process::exit(1);
             }
@@ -247,7 +284,7 @@ fn main() {
             }
             let name_csv = args.remove(0);
             let cmd = args.remove(0);
-            if let Err(e) = exec_with(&name_csv, &cmd, &args) {
+            if let Err(e) = exec_with(backend.as_ref(), &name_csv, &cmd, &args) {
                 eprintln!("{e}");
                 std::process::exit(1);
             }
