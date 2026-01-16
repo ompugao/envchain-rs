@@ -1,0 +1,13 @@
+[package]
+name = "envchain-rs"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "envchain"
+path = "src/main.rs"
+
+[dependencies]
+secret-service = { version = "3", features = ["rt-async-io-crypto-rust"] }
+rpassword = "7"
+async-io = "1"
