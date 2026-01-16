@@ -144,10 +144,10 @@ impl AgeBackend {
             }
             
             // Check for SSH public key format in the identity file
-            if line.starts_with("ssh-") {
-                if let Ok(recipient) = line.parse::<age::ssh::Recipient>() {
-                    return Ok(Box::new(recipient));
-                }
+            if line.starts_with("ssh-")
+                && let Ok(recipient) = line.parse::<age::ssh::Recipient>()
+            {
+                return Ok(Box::new(recipient));
             }
         }
 
@@ -158,10 +158,10 @@ impl AgeBackend {
                 .map_err(|e| format!("Failed to read public key file: {e}"))?;
             for line in pub_str.lines() {
                 let line = line.trim();
-                if line.starts_with("ssh-") {
-                    if let Ok(recipient) = line.parse::<age::ssh::Recipient>() {
-                        return Ok(Box::new(recipient));
-                    }
+                if line.starts_with("ssh-")
+                    && let Ok(recipient) = line.parse::<age::ssh::Recipient>()
+                {
+                    return Ok(Box::new(recipient));
                 }
             }
         }
