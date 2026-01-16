@@ -12,6 +12,8 @@ enum BackendType {
     SecretService,
     #[cfg(feature = "age-backend")]
     Age,
+    #[cfg(all(target_os = "macos", feature = "keychain-backend"))]
+    Keychain,
 }
 
 impl BackendType {
@@ -21,12 +23,32 @@ impl BackendType {
             "secret-service" | "secretservice" | "dbus" => Some(Self::SecretService),
             #[cfg(feature = "age-backend")]
             "age" | "file" => Some(Self::Age),
+            #[cfg(all(target_os = "macos", feature = "keychain-backend"))]
+            "keychain" | "macos" | "osx" => Some(Self::Keychain),
             _ => None,
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn default() -> Self {
-        // Prefer secret-service if available, fallback to age
+        // On macOS, prefer keychain
+        #[cfg(feature = "keychain-backend")]
+        {
+            Self::Keychain
+        }
+        #[cfg(all(not(feature = "keychain-backend"), feature = "age-backend"))]
+        {
+            Self::Age
+        }
+        #[cfg(all(not(feature = "keychain-backend"), not(feature = "age-backend"), feature = "secret-service-backend"))]
+        {
+            Self::SecretService
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn default() -> Self {
+        // On Linux, prefer secret-service, fallback to age
         #[cfg(feature = "secret-service-backend")]
         {
             Self::SecretService
@@ -49,6 +71,8 @@ fn create_backend(
         }
         #[cfg(feature = "age-backend")]
         BackendType::Age => Ok(Box::new(backend::age::AgeBackend::new(age_identity)?)),
+        #[cfg(all(target_os = "macos", feature = "keychain-backend"))]
+        BackendType::Keychain => Ok(Box::new(backend::keychain::KeychainBackend::new()?)),
     }
 }
 
@@ -67,7 +91,7 @@ Usage:
     {prog} --unset NAMESPACE ENV [ENV ..]
 
 Backend options:
-  --backend <type>       Backend type: 'secret-service' (default) or 'age'
+  --backend <type>       Backend type: 'keychain' (macOS), 'secret-service' (Linux), or 'age'
   --age-identity <path>  Path to age identity file (SSH key or age identity)
                          Can also be set via ENVCHAIN_AGE_IDENTITY env var
 

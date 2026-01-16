@@ -1,6 +1,6 @@
 # envchain-rs
 
-A Rust port of [sorah/envchain](https://github.com/sorah/envchain) — set environment variables with D-Bus secret service (Linux) or age-encrypted files.
+A Rust port of [sorah/envchain](https://github.com/sorah/envchain) — set environment variables securely using your system's secret storage.
 
 ## What?
 
@@ -10,15 +10,18 @@ A common practice is to set them in shell initialization files such as `.bashrc`
 
 `envchain` allows you to securely store credential environment variables in your system's secret vault, and set them as environment variables only when explicitly requested.
 
-This Rust implementation supports **Linux** via:
-- **D-Bus Secret Service** (gnome-keyring, KeePassXC, etc.) - default
-- **Age encryption** - portable, works without D-Bus (ideal for WSL, headless servers)
-
-> For macOS Keychain support, use the original [envchain](https://github.com/sorah/envchain).
+This Rust implementation supports multiple backends:
+- **macOS Keychain** - native keychain integration (default on macOS), compatible with original envchain
+- **D-Bus Secret Service** - gnome-keyring, KeePassXC, etc. (default on Linux)
+- **Age encryption** - portable, works without system keyring (ideal for WSL, headless servers, containers)
 
 ## Requirements
 
-### D-Bus Secret Service Backend (default)
+### macOS Keychain Backend (default on macOS)
+- macOS 10.12 or later
+- Compatible with secrets stored by the original [sorah/envchain](https://github.com/sorah/envchain)
+
+### D-Bus Secret Service Backend (default on Linux)
 - D-Bus Secret Service compatible backend:
   - GNOME Keyring
   - KeePassXC
@@ -43,10 +46,13 @@ sudo cp target/release/envchain /usr/local/bin/
 ### Feature Flags
 
 ```bash
-# Build with only age backend (no D-Bus dependency)
+# Build with only age backend (minimal dependencies)
 cargo build --release --no-default-features --features age-backend
 
-# Build with only secret-service backend
+# Build with only keychain backend (macOS)
+cargo build --release --no-default-features --features keychain-backend
+
+# Build with only secret-service backend (Linux)
 cargo build --release --no-default-features --features secret-service-backend
 ```
 
@@ -149,8 +155,9 @@ envchain --unset aws AWS_ACCESS_KEY_ID
 #### `--backend <type>`
 
 Select the storage backend:
-- `secret-service` (default) - D-Bus Secret Service
-- `age` - Age-encrypted file storage
+- `keychain` - macOS Keychain (default on macOS)
+- `secret-service` - D-Bus Secret Service (default on Linux)
+- `age` - Age-encrypted file storage (portable)
 
 ```bash
 # Use age backend
@@ -172,8 +179,21 @@ envchain --backend age --age-identity ~/.ssh/id_ed25519 --set aws AWS_ACCESS_KEY
 
 | Variable | Description |
 |----------|-------------|
-| `ENVCHAIN_BACKEND` | Default backend (`secret-service` or `age`) |
+| `ENVCHAIN_BACKEND` | Default backend (`keychain`, `secret-service`, or `age`) |
 | `ENVCHAIN_AGE_IDENTITY` | Path to age identity file for age backend |
+
+## macOS Keychain Backend
+
+The keychain backend stores secrets in the macOS Keychain with service names prefixed by `envchain-`, making it fully compatible with secrets stored by the original [sorah/envchain](https://github.com/sorah/envchain).
+
+```bash
+# On macOS, keychain is the default
+envchain --set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+envchain aws aws s3 ls
+
+# Or explicitly select keychain backend
+envchain --backend keychain --set aws AWS_ACCESS_KEY_ID
+```
 
 ## Age Backend Details
 
@@ -217,7 +237,8 @@ envchain --set aws AWS_ACCESS_KEY_ID  # Auto-generates identity on first use
 
 ## Differences from original envchain
 
-- **Linux only**: This Rust port supports D-Bus Secret Service and age backends. For macOS, use the original C implementation.
+- **Cross-platform**: Supports macOS (Keychain), Linux (D-Bus Secret Service), and portable age encryption
+- **macOS Keychain compatibility**: Uses the same service name format (`envchain-*`) as the original implementation
 - **Additional features**:
   - `--unset` to remove stored variables
   - `--list NAMESPACE` to list variables within a namespace
