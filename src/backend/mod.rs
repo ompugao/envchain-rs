@@ -24,3 +24,6 @@ pub mod secret_service;
 
 #[cfg(feature = "age-backend")]
 pub mod age;
+
+#[cfg(feature = "windows-credential-manager")]
+pub mod windows_credential_manager;

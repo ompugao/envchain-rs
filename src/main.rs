@@ -12,6 +12,8 @@ enum BackendType {
     SecretService,
     #[cfg(feature = "age-backend")]
     Age,
+    #[cfg(feature = "windows-credential-manager")]
+    WindowsCredentialManager,
 }
 
 impl BackendType {
@@ -21,6 +23,10 @@ impl BackendType {
             "secret-service" | "secretservice" | "dbus" => Some(Self::SecretService),
             #[cfg(feature = "age-backend")]
             "age" | "file" => Some(Self::Age),
+            #[cfg(feature = "windows-credential-manager")]
+            "wincred" | "windows-credential-manager" | "windows" => {
+                Some(Self::WindowsCredentialManager)
+            }
             _ => None,
         }
     }
@@ -31,7 +37,18 @@ impl BackendType {
         {
             Self::SecretService
         }
-        #[cfg(all(not(feature = "secret-service-backend"), feature = "age-backend"))]
+        #[cfg(all(
+            not(feature = "secret-service-backend"),
+            feature = "windows-credential-manager"
+        ))]
+        {
+            Self::WindowsCredentialManager
+        }
+        #[cfg(all(
+            not(feature = "secret-service-backend"),
+            not(feature = "windows-credential-manager"),
+            feature = "age-backend"
+        ))]
         {
             Self::Age
         }
@@ -49,6 +66,10 @@ fn create_backend(
         }
         #[cfg(feature = "age-backend")]
         BackendType::Age => Ok(Box::new(backend::age::AgeBackend::new(age_identity)?)),
+        #[cfg(feature = "windows-credential-manager")]
+        BackendType::WindowsCredentialManager => Ok(Box::new(
+            backend::windows_credential_manager::WindowsCredentialManagerBackend::new()?,
+        )),
     }
 }
 
@@ -67,12 +88,12 @@ Usage:
     {prog} --unset NAMESPACE ENV [ENV ..]
 
 Backend options:
-  --backend <type>       Backend type: 'secret-service' (default) or 'age'
+  --backend <type>       Backend type: 'secret-service' (default), 'age', or 'wincred'
   --age-identity <path>  Path to age identity file (SSH key or age identity)
                          Can also be set via ENVCHAIN_AGE_IDENTITY env var
 
 Environment variables:
-  ENVCHAIN_BACKEND       Default backend ('secret-service' or 'age')
+  ENVCHAIN_BACKEND       Default backend ('secret-service', 'age', or 'wincred')
   ENVCHAIN_AGE_IDENTITY  Path to age identity file for age backend
 "
     );
