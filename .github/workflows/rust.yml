@@ -45,8 +45,32 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Run tests
-        run: cargo test --release --target ${{ matrix.target }}
-        continue-on-error: true
+        run: cargo test --release --target ${{ matrix.target }} -- --test-threads=1 --nocapture
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Verify keychain tests ran (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          echo "Verifying keychain backend tests..."
+          TEST_OUTPUT=$(cargo test --release --target ${{ matrix.target }} keychain 2>&1)
+          
+          # Check that keychain tests actually ran (not 0 tests)
+          if echo "$TEST_OUTPUT" | grep -q "running 0 tests"; then
+            echo "❌ ERROR: Keychain tests did not run on macOS!"
+            echo "$TEST_OUTPUT"
+            exit 1
+          fi
+          
+          # Check for test results
+          if echo "$TEST_OUTPUT" | grep -q "test result:.*ok"; then
+            TEST_COUNT=$(echo "$TEST_OUTPUT" | grep -o "[0-9]\+ passed" | grep -o "[0-9]\+")
+            echo "✅ SUCCESS: $TEST_COUNT keychain tests passed"
+          else
+            echo "❌ ERROR: Keychain tests failed!"
+            echo "$TEST_OUTPUT"
+            exit 1
+          fi
 
       - name: Prepare artifact
         run: |
