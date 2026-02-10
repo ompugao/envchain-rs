@@ -24,3 +24,6 @@ pub mod secret_service;
 
 #[cfg(feature = "age-backend")]
 pub mod age;
+
+#[cfg(all(target_os = "macos", feature = "keychain-backend"))]
+pub mod keychain;

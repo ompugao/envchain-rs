@@ -32,15 +32,18 @@ impl AgeBackend {
             .ok_or("Could not determine config directory")?
             .join("envchain");
 
-        fs::create_dir_all(&config_dir)
-            .map_err(|e| format!("Failed to create config dir: {e}"))?;
+        fs::create_dir_all(&config_dir).map_err(|e| format!("Failed to create config dir: {e}"))?;
 
         let secrets_path = config_dir.join("secrets.age");
         let default_identity_path = config_dir.join("identity.txt");
         let recipient_path = config_dir.join("recipient.txt");
 
         let identity_path = identity_path
-            .or_else(|| std::env::var("ENVCHAIN_AGE_IDENTITY").ok().map(PathBuf::from))
+            .or_else(|| {
+                std::env::var("ENVCHAIN_AGE_IDENTITY")
+                    .ok()
+                    .map(PathBuf::from)
+            })
             .unwrap_or(default_identity_path);
 
         let mut backend = Self {
@@ -73,7 +76,10 @@ impl AgeBackend {
         }
 
         // Generate a new native age identity
-        eprintln!("Generating new age identity at {}", self.identity_path.display());
+        eprintln!(
+            "Generating new age identity at {}",
+            self.identity_path.display()
+        );
         let identity = age::x25519::Identity::generate();
         let recipient = identity.to_public();
 
@@ -99,8 +105,12 @@ impl AgeBackend {
 
     /// Load identities from file (supports SSH and native age identities)
     fn load_identities(&self) -> Result<Vec<Box<dyn age::Identity>>, String> {
-        let identity_bytes = fs::read(&self.identity_path)
-            .map_err(|e| format!("Failed to read identity file {}: {e}", self.identity_path.display()))?;
+        let identity_bytes = fs::read(&self.identity_path).map_err(|e| {
+            format!(
+                "Failed to read identity file {}: {e}",
+                self.identity_path.display()
+            )
+        })?;
         let identity_str = String::from_utf8_lossy(&identity_bytes);
 
         // Try as SSH private key first (OpenSSH format starts with "-----BEGIN")
@@ -142,7 +152,7 @@ impl AgeBackend {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            
+
             // Check for SSH public key format in the identity file
             if line.starts_with("ssh-")
                 && let Ok(recipient) = line.parse::<age::ssh::Recipient>()
@@ -227,8 +237,7 @@ impl AgeBackend {
 
         // Write atomically via temp file
         let temp_path = self.secrets_path.with_extension("tmp");
-        fs::write(&temp_path, &encrypted)
-            .map_err(|e| format!("Failed to write temp file: {e}"))?;
+        fs::write(&temp_path, &encrypted).map_err(|e| format!("Failed to write temp file: {e}"))?;
         fs::rename(&temp_path, &self.secrets_path)
             .map_err(|e| format!("Failed to rename secrets file: {e}"))?;
 
