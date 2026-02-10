@@ -52,8 +52,8 @@ impl Backend for KeychainBackend {
                     let svce_key = CFString::from_static_string("svce");
                     let service_key = CFString::from_static_string("service");
                     
-                    let service_ref = dict.find(&svce_key)
-                        .or_else(|| dict.find(&service_key))?;
+                    let service_ref = dict.find(svce_key)
+                        .or_else(|| dict.find(service_key))?;
                     
                     // Convert to CFString and then to Rust String
                     let service_cfstr: CFString = unsafe { CFString::wrap_under_get_rule(*service_ref as *const _) };
@@ -92,7 +92,7 @@ impl Backend for KeychainBackend {
                 let acct_key = CFString::from_static_string("acct");
                 let account_key = CFString::from_static_string("account");
                 
-                if let Some(account_ref) = dict.find(&acct_key).or_else(|| dict.find(&account_key)) {
+                if let Some(account_ref) = dict.find(acct_key).or_else(|| dict.find(account_key)) {
                     // Convert to CFString and then to Rust String
                     let account_cfstr: CFString = unsafe { CFString::wrap_under_get_rule(*account_ref as *const _) };
                     let key = account_cfstr.to_string();
@@ -101,7 +101,7 @@ impl Backend for KeychainBackend {
                     let vdata_key = CFString::from_static_string("v_Data");
                     let data_key = CFString::from_static_string("data");
                     
-                    if let Some(data_ref) = dict.find(&vdata_key).or_else(|| dict.find(&data_key)) {
+                    if let Some(data_ref) = dict.find(vdata_key).or_else(|| dict.find(data_key)) {
                         use core_foundation::base::TCFType;
                         use core_foundation::data::CFData;
                         
