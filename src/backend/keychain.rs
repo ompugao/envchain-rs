@@ -2,10 +2,18 @@
 //!
 //! Uses the Security framework to store secrets in the macOS Keychain.
 //! Compatible with the original sorah/envchain implementation.
+//!
+//! # Testing
+//!
+//! Tests in this module only run on macOS with the keychain-backend feature enabled.
+//! They interact with the actual macOS Keychain and are gated with:
+//! `#[cfg(all(target_os = "macos", feature = "keychain-backend"))]`
 
 use super::{Backend, EnvKey, EnvValue, Namespace};
 use security_framework::item::{ItemClass, ItemSearchOptions, Limit, SearchResult};
-use security_framework::passwords::{delete_generic_password, get_generic_password, set_generic_password};
+use security_framework::passwords::{
+    delete_generic_password, get_generic_password, set_generic_password,
+};
 use std::collections::HashMap;
 
 /// Service name prefix used by envchain (compatible with original implementation)
@@ -134,7 +142,7 @@ mod tests {
     fn test_service_name_format() {
         let service = KeychainBackend::service_name("test");
         assert_eq!(service, "envchain-test");
-        
+
         // Verify compatibility with original envchain
         let service = KeychainBackend::service_name("aws");
         assert_eq!(service, "envchain-aws");
@@ -143,56 +151,66 @@ mod tests {
     #[test]
     fn test_set_and_get_secret() {
         cleanup_test_data();
-        
+
         let mut backend = KeychainBackend::new().unwrap();
-        
+
         // Set a secret
         let result = backend.set_secret(TEST_NAMESPACE, TEST_KEY, TEST_VALUE);
         assert!(result.is_ok(), "Failed to set secret: {:?}", result.err());
-        
+
         // Retrieve and verify
         let secrets = backend.list_secrets(TEST_NAMESPACE).unwrap();
         assert_eq!(secrets.get(TEST_KEY), Some(&TEST_VALUE.to_string()));
-        
+
         cleanup_test_data();
     }
 
     #[test]
     fn test_update_existing_secret() {
         cleanup_test_data();
-        
+
         let mut backend = KeychainBackend::new().unwrap();
-        
+
         // Set initial value
-        backend.set_secret(TEST_NAMESPACE, TEST_KEY, "old-value").unwrap();
-        
+        backend
+            .set_secret(TEST_NAMESPACE, TEST_KEY, "old-value")
+            .unwrap();
+
         // Update with new value
-        backend.set_secret(TEST_NAMESPACE, TEST_KEY, "new-value").unwrap();
-        
+        backend
+            .set_secret(TEST_NAMESPACE, TEST_KEY, "new-value")
+            .unwrap();
+
         // Verify updated value
         let secrets = backend.list_secrets(TEST_NAMESPACE).unwrap();
         assert_eq!(secrets.get(TEST_KEY), Some(&"new-value".to_string()));
-        
+
         cleanup_test_data();
     }
 
     #[test]
     fn test_delete_secret() {
         cleanup_test_data();
-        
+
         let mut backend = KeychainBackend::new().unwrap();
-        
+
         // Set a secret
-        backend.set_secret(TEST_NAMESPACE, TEST_KEY, TEST_VALUE).unwrap();
-        
+        backend
+            .set_secret(TEST_NAMESPACE, TEST_KEY, TEST_VALUE)
+            .unwrap();
+
         // Verify it exists
         let secrets = backend.list_secrets(TEST_NAMESPACE).unwrap();
         assert!(secrets.contains_key(TEST_KEY));
-        
+
         // Delete it
         let result = backend.delete_secret(TEST_NAMESPACE, TEST_KEY);
-        assert!(result.is_ok(), "Failed to delete secret: {:?}", result.err());
-        
+        assert!(
+            result.is_ok(),
+            "Failed to delete secret: {:?}",
+            result.err()
+        );
+
         // Verify it's gone
         let secrets = backend.list_secrets(TEST_NAMESPACE).unwrap();
         assert!(!secrets.contains_key(TEST_KEY));
@@ -201,59 +219,68 @@ mod tests {
     #[test]
     fn test_delete_nonexistent_secret() {
         cleanup_test_data();
-        
+
         let mut backend = KeychainBackend::new().unwrap();
-        
+
         // Try to delete a secret that doesn't exist
         let result = backend.delete_secret(TEST_NAMESPACE, "NONEXISTENT_KEY");
-        assert!(result.is_err(), "Expected error when deleting nonexistent secret");
+        assert!(
+            result.is_err(),
+            "Expected error when deleting nonexistent secret"
+        );
     }
 
     #[test]
     fn test_multiple_secrets_in_namespace() {
         cleanup_test_data();
-        
+
         let mut backend = KeychainBackend::new().unwrap();
-        
+
         // Set multiple secrets
-        backend.set_secret(TEST_NAMESPACE, "TEST_VAR2", "value2").unwrap();
-        backend.set_secret(TEST_NAMESPACE, "TEST_VAR3", "value3").unwrap();
-        
+        backend
+            .set_secret(TEST_NAMESPACE, "TEST_VAR2", "value2")
+            .unwrap();
+        backend
+            .set_secret(TEST_NAMESPACE, "TEST_VAR3", "value3")
+            .unwrap();
+
         // Retrieve all secrets
         let secrets = backend.list_secrets(TEST_NAMESPACE).unwrap();
         assert_eq!(secrets.len(), 2);
         assert_eq!(secrets.get("TEST_VAR2"), Some(&"value2".to_string()));
         assert_eq!(secrets.get("TEST_VAR3"), Some(&"value3".to_string()));
-        
+
         cleanup_test_data();
     }
 
     #[test]
     fn test_list_namespaces() {
         cleanup_test_data();
-        
+
         let mut backend = KeychainBackend::new().unwrap();
-        
+
         // Set a secret to create the namespace
-        backend.set_secret(TEST_NAMESPACE, TEST_KEY, TEST_VALUE).unwrap();
-        
+        backend
+            .set_secret(TEST_NAMESPACE, TEST_KEY, TEST_VALUE)
+            .unwrap();
+
         // List namespaces
         let namespaces = backend.list_namespaces().unwrap();
-        
+
         // Should contain our test namespace
         assert!(
             namespaces.contains(&TEST_NAMESPACE.to_string()),
             "Test namespace not found in: {:?}",
             namespaces
         );
-        
+
         cleanup_test_data();
     }
 
     #[test]
     fn test_list_secrets_empty_namespace() {
         let backend = KeychainBackend::new().unwrap();
-        
+
         // Query a namespace that shouldn't exist
         let secrets = backend.list_secrets("nonexistent-namespace-xyz").unwrap();
         assert!(secrets.is_empty());
@@ -262,50 +289,54 @@ mod tests {
     #[test]
     fn test_special_characters_in_values() {
         cleanup_test_data();
-        
+
         let mut backend = KeychainBackend::new().unwrap();
-        
+
         let special_value = "value with spaces, symbols: !@#$%^&*()_+{}[]|:;<>?,./";
-        backend.set_secret(TEST_NAMESPACE, TEST_KEY, special_value).unwrap();
-        
+        backend
+            .set_secret(TEST_NAMESPACE, TEST_KEY, special_value)
+            .unwrap();
+
         let secrets = backend.list_secrets(TEST_NAMESPACE).unwrap();
         assert_eq!(secrets.get(TEST_KEY), Some(&special_value.to_string()));
-        
+
         cleanup_test_data();
     }
 
     #[test]
     fn test_empty_value() {
         cleanup_test_data();
-        
+
         let mut backend = KeychainBackend::new().unwrap();
-        
+
         backend.set_secret(TEST_NAMESPACE, TEST_KEY, "").unwrap();
-        
+
         let secrets = backend.list_secrets(TEST_NAMESPACE).unwrap();
         assert_eq!(secrets.get(TEST_KEY), Some(&"".to_string()));
-        
+
         cleanup_test_data();
     }
 
     #[test]
     fn test_namespace_isolation() {
         cleanup_test_data();
-        
+
         let mut backend = KeychainBackend::new().unwrap();
         let namespace2 = "envchain-test-ns2";
-        
+
         // Set same key in two different namespaces
-        backend.set_secret(TEST_NAMESPACE, TEST_KEY, "value1").unwrap();
+        backend
+            .set_secret(TEST_NAMESPACE, TEST_KEY, "value1")
+            .unwrap();
         backend.set_secret(namespace2, TEST_KEY, "value2").unwrap();
-        
+
         // Verify isolation
         let secrets1 = backend.list_secrets(TEST_NAMESPACE).unwrap();
         let secrets2 = backend.list_secrets(namespace2).unwrap();
-        
+
         assert_eq!(secrets1.get(TEST_KEY), Some(&"value1".to_string()));
         assert_eq!(secrets2.get(TEST_KEY), Some(&"value2".to_string()));
-        
+
         // Cleanup both namespaces
         let _ = backend.delete_secret(namespace2, TEST_KEY);
         cleanup_test_data();

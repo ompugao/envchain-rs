@@ -40,7 +40,11 @@ impl BackendType {
         {
             Self::Age
         }
-        #[cfg(all(not(feature = "keychain-backend"), not(feature = "age-backend"), feature = "secret-service-backend"))]
+        #[cfg(all(
+            not(feature = "keychain-backend"),
+            not(feature = "age-backend"),
+            feature = "secret-service-backend"
+        ))]
         {
             Self::SecretService
         }
@@ -66,9 +70,9 @@ fn create_backend(
 ) -> Result<Box<dyn Backend>, String> {
     match backend_type {
         #[cfg(feature = "secret-service-backend")]
-        BackendType::SecretService => {
-            Ok(Box::new(backend::secret_service::SecretServiceBackend::new()?))
-        }
+        BackendType::SecretService => Ok(Box::new(
+            backend::secret_service::SecretServiceBackend::new()?,
+        )),
         #[cfg(feature = "age-backend")]
         BackendType::Age => Ok(Box::new(backend::age::AgeBackend::new(age_identity)?)),
         #[cfg(all(target_os = "macos", feature = "keychain-backend"))]
@@ -133,7 +137,12 @@ fn list_values(backend: &dyn Backend, target: &str, show_value: bool) -> Result<
     Ok(())
 }
 
-fn set_values(backend: &mut dyn Backend, noecho: bool, name: &str, keys: &[String]) -> Result<(), String> {
+fn set_values(
+    backend: &mut dyn Backend,
+    noecho: bool,
+    name: &str,
+    keys: &[String],
+) -> Result<(), String> {
     for key in keys {
         let prompt = format!("{name}.{key}");
         let value = if noecho {
@@ -159,7 +168,12 @@ fn unset_values(backend: &mut dyn Backend, name: &str, keys: &[String]) -> Resul
     Ok(())
 }
 
-fn exec_with(backend: &dyn Backend, name_csv: &str, cmd: &str, args: &[String]) -> Result<(), String> {
+fn exec_with(
+    backend: &dyn Backend,
+    name_csv: &str,
+    cmd: &str,
+    args: &[String],
+) -> Result<(), String> {
     for name in name_csv.split(',') {
         let secrets = backend.list_secrets(name)?;
         for (key, val) in secrets {

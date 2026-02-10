@@ -1,6 +1,6 @@
 use super::{Backend, EnvKey, EnvValue, Namespace};
-use secret_service::blocking::{Collection, Item, SecretService};
 use secret_service::EncryptionType;
+use secret_service::blocking::{Collection, Item, SecretService};
 use std::collections::HashMap;
 
 pub struct SecretServiceBackend {
