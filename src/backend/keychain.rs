@@ -10,6 +10,9 @@
 //! `#[cfg(all(target_os = "macos", feature = "keychain-backend"))]`
 
 use super::{Backend, EnvKey, EnvValue, Namespace};
+use core_foundation::base::TCFType;
+use core_foundation::data::CFData;
+use core_foundation::string::CFString;
 use security_framework::item::{ItemClass, ItemSearchOptions, Limit, SearchResult};
 use security_framework::passwords::{
     delete_generic_password, get_generic_password, set_generic_password,
@@ -45,12 +48,19 @@ impl Backend for KeychainBackend {
             .into_iter()
             .filter_map(|item| {
                 if let SearchResult::Dict(dict) = item {
-                    // Get the service attribute
-                    if let Some(service) = dict.get("svce").or(dict.get("service")) {
-                        let service_str = service.to_string();
-                        if service_str.starts_with(SERVICE_PREFIX) {
-                            return Some(service_str[SERVICE_PREFIX.len()..].to_string());
-                        }
+                    // Get the service attribute - try both "svce" and "service" keys
+                    let svce_key = CFString::from_static_string("svce");
+                    let service_key = CFString::from_static_string("service");
+                    
+                    let service_ref = dict.find(&svce_key)
+                        .or_else(|| dict.find(&service_key))?;
+                    
+                    // Convert to CFString and then to Rust String
+                    let service_cfstr: CFString = unsafe { CFString::wrap_under_get_rule(*service_ref as *const _) };
+                    let service_str = service_cfstr.to_string();
+                    
+                    if service_str.starts_with(SERVICE_PREFIX) {
+                        return Some(service_str[SERVICE_PREFIX.len()..].to_string());
                     }
                 }
                 None
@@ -79,13 +89,27 @@ impl Backend for KeychainBackend {
         for item in results {
             if let SearchResult::Dict(dict) = item {
                 // Get account name (key) and password (value)
-                if let Some(account) = dict.get("acct").or(dict.get("account")) {
-                    let key = account.to_string();
-                    if let Some(data) = dict.get("v_Data").or(dict.get("data")) {
-                        if let Some(bytes) = data.as_bytes() {
-                            let value = String::from_utf8_lossy(bytes).to_string();
-                            secrets.insert(key, value);
-                        }
+                let acct_key = CFString::from_static_string("acct");
+                let account_key = CFString::from_static_string("account");
+                
+                if let Some(account_ref) = dict.find(&acct_key).or_else(|| dict.find(&account_key)) {
+                    // Convert to CFString and then to Rust String
+                    let account_cfstr: CFString = unsafe { CFString::wrap_under_get_rule(*account_ref as *const _) };
+                    let key = account_cfstr.to_string();
+                    
+                    // Get password data
+                    let vdata_key = CFString::from_static_string("v_Data");
+                    let data_key = CFString::from_static_string("data");
+                    
+                    if let Some(data_ref) = dict.find(&vdata_key).or_else(|| dict.find(&data_key)) {
+                        use core_foundation::base::TCFType;
+                        use core_foundation::data::CFData;
+                        
+                        // Convert to CFData and get bytes
+                        let data_cfdata: CFData = unsafe { CFData::wrap_under_get_rule(*data_ref as *const _) };
+                        let bytes = data_cfdata.bytes();
+                        let value = String::from_utf8_lossy(bytes).to_string();
+                        secrets.insert(key, value);
                     }
                 }
             }
