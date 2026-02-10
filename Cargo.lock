@@ -635,6 +635,7 @@ dependencies = [
  "age",
  "async-io 1.13.0",
  "core-foundation",
+ "core-foundation-sys",
  "dirs",
  "rpassword",
  "secret-service",
