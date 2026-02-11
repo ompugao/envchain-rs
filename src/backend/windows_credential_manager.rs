@@ -86,7 +86,7 @@ impl Backend for WindowsCredentialManagerBackend {
 
         let mut secrets = HashMap::new();
 
-        for entry in entries {
+        for entry in &entries {
             // Get target_name from attributes
             if let Ok(attrs) = entry.get_attributes() {
                 if let Some(target_name) = attrs.get("target_name") {
@@ -112,11 +112,11 @@ impl Backend for WindowsCredentialManagerBackend {
     }
 
     fn set_secret(&mut self, namespace: &str, key: &str, value: &str) -> Result<(), String> {
-        // Build entry using service=namespace, user=key
-        // The store will create target_name as "envchain:{key}:{namespace}"
+        // build(service, user, _) produces target_name "{prefix}{user}{divider}{service}{suffix}"
+        // so build(key, namespace, _) => "envchain:{namespace}:{key}"
         let entry = self
             .store
-            .build(namespace, key, None)
+            .build(key, namespace, None)
             .map_err(|e| format!("Failed to build credential entry: {e}"))?;
 
         entry
@@ -127,10 +127,10 @@ impl Backend for WindowsCredentialManagerBackend {
     }
 
     fn delete_secret(&mut self, namespace: &str, key: &str) -> Result<(), String> {
-        // Build entry to get the same target_name
+        // build(key, namespace, _) => target_name "envchain:{namespace}:{key}"
         let entry = self
             .store
-            .build(namespace, key, None)
+            .build(key, namespace, None)
             .map_err(|e| format!("Failed to build credential entry: {e}"))?;
 
         entry

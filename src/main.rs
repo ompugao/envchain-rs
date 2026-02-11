@@ -157,14 +157,31 @@ fn unset_values(backend: &mut dyn Backend, name: &str, keys: &[String]) -> Resul
 }
 
 fn exec_with(backend: &dyn Backend, name_csv: &str, cmd: &str, args: &[String]) -> Result<(), String> {
+    let mut keys: Vec<String> = Vec::new();
     for name in name_csv.split(',') {
         let secrets = backend.list_secrets(name)?;
         for (key, val) in secrets {
             // SAFETY: We are the only thread running at this point before exec,
             // and we're about to replace this process with exec anyway.
-            unsafe { env::set_var(&key, val) };
+            unsafe { env::set_var(&key, &val) };
+            keys.push(key);
         }
     }
+
+    // On Windows, append secret keys to WSLENV so they are forwarded
+    // across the WSL interop boundary when the child process is a WSL command.
+    #[cfg(target_os = "windows")]
+    if !keys.is_empty() {
+        let mut wslenv = env::var("WSLENV").unwrap_or_default();
+        for key in &keys {
+            if !wslenv.is_empty() {
+                wslenv.push(':');
+            }
+            wslenv.push_str(key);
+        }
+        unsafe { env::set_var("WSLENV", &wslenv) };
+    }
+
     let status = Command::new(cmd)
         .args(args)
         .status()
