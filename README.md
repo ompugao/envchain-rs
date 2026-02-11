@@ -1,6 +1,6 @@
 # envchain-rs
 
-A Rust port of [sorah/envchain](https://github.com/sorah/envchain) — set environment variables with D-Bus secret service (Linux) or age-encrypted files.
+A Rust port of [sorah/envchain](https://github.com/sorah/envchain) — set environment variables with D-Bus secret service (Linux), age-encrypted files, or Windows Credential Manager.
 
 ## What?
 
@@ -10,9 +10,10 @@ A common practice is to set them in shell initialization files such as `.bashrc`
 
 `envchain` allows you to securely store credential environment variables in your system's secret vault, and set them as environment variables only when explicitly requested.
 
-This Rust implementation supports **Linux** via:
-- **D-Bus Secret Service** (gnome-keyring, KeePassXC, etc.) - default
-- **Age encryption** - portable, works without D-Bus (ideal for WSL, headless servers)
+This Rust implementation supports:
+- **Linux**: D-Bus Secret Service (gnome-keyring, KeePassXC, etc.) - default
+- **Windows/WSL2**: Windows Credential Manager
+- **Cross-platform**: Age encryption - portable, works without platform-specific backends
 
 > For macOS Keychain support, use the original [envchain](https://github.com/sorah/envchain).
 
@@ -28,6 +29,11 @@ This Rust implementation supports **Linux** via:
 - No external dependencies required
 - Supports SSH keys (Ed25519, RSA) or native age identities
 - Works in WSL, headless servers, containers
+
+### Windows Credential Manager Backend
+- Native Windows credential storage
+- Works on both Windows and WSL2
+- No additional setup required on Windows systems
 
 ## Installation
 
@@ -48,6 +54,9 @@ cargo build --release --no-default-features --features age-backend
 
 # Build with only secret-service backend
 cargo build --release --no-default-features --features secret-service-backend
+
+# Build with Windows Credential Manager backend (Windows/WSL2 only)
+cargo build --release --no-default-features --features windows-credential-manager
 ```
 
 ## Usage
@@ -149,8 +158,9 @@ envchain --unset aws AWS_ACCESS_KEY_ID
 #### `--backend <type>`
 
 Select the storage backend:
-- `secret-service` (default) - D-Bus Secret Service
+- `secret-service` (default on Linux) - D-Bus Secret Service
 - `age` - Age-encrypted file storage
+- `wincred` - Windows Credential Manager (Windows/WSL2)
 
 ```bash
 # Use age backend
@@ -158,6 +168,9 @@ envchain --backend age --set aws AWS_ACCESS_KEY_ID
 
 # Use secret-service backend explicitly
 envchain --backend secret-service --set aws AWS_ACCESS_KEY_ID
+
+# Use Windows Credential Manager (on Windows/WSL2)
+envchain --backend wincred --set aws AWS_ACCESS_KEY_ID
 ```
 
 #### `--age-identity <path>`
@@ -172,7 +185,7 @@ envchain --backend age --age-identity ~/.ssh/id_ed25519 --set aws AWS_ACCESS_KEY
 
 | Variable | Description |
 |----------|-------------|
-| `ENVCHAIN_BACKEND` | Default backend (`secret-service` or `age`) |
+| `ENVCHAIN_BACKEND` | Default backend (`secret-service`, `age`, or `wincred`) |
 | `ENVCHAIN_AGE_IDENTITY` | Path to age identity file for age backend |
 
 ## Age Backend Details
@@ -215,15 +228,48 @@ envchain --set aws AWS_ACCESS_KEY_ID  # Auto-generates identity on first use
 - Consider using an unencrypted SSH key dedicated to envchain
 - Or use a native age identity (no passphrase by default)
 
+## Windows Credential Manager Backend
+
+The Windows Credential Manager backend provides native credential storage on Windows and WSL2.
+
+### Usage on Windows
+
+```bash
+# Build with Windows backend
+cargo build --release --no-default-features --features windows-credential-manager
+
+# Use it
+envchain --backend wincred --set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+envchain aws aws s3 ls
+```
+
+### Usage on WSL2
+
+The Windows backend works seamlessly from WSL2, storing credentials in the Windows Credential Manager:
+
+```bash
+# Set backend to wincred
+export ENVCHAIN_BACKEND=wincred
+
+# Credentials are stored in Windows Credential Manager
+envchain --set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+
+# Access from WSL2
+envchain aws aws s3 ls
+```
+
+Credentials are stored with target names like `envchain:aws:AWS_ACCESS_KEY_ID` and can be viewed in Windows Credential Manager (Control Panel → Credential Manager → Windows Credentials).
+
 ## Differences from original envchain
 
-- **Linux only**: This Rust port supports D-Bus Secret Service and age backends. For macOS, use the original C implementation.
+- **Cross-platform backends**: Supports Linux (D-Bus Secret Service), Windows/WSL2 (Credential Manager), and portable age encryption
 - **Additional features**:
   - `--unset` to remove stored variables
   - `--list NAMESPACE` to list variables within a namespace
   - `--list --show-value NAMESPACE` to display variable values
   - `--backend` to select storage backend
-  - Age backend for portable, D-Bus-free operation
+  - Age backend for portable, platform-independent operation
+  - Windows Credential Manager for native Windows/WSL2 support
 
 ## Credits
 
