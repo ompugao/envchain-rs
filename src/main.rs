@@ -1,6 +1,8 @@
 mod backend;
 
 use backend::Backend;
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use rpassword::read_password;
 use std::env;
 use std::path::PathBuf;
@@ -55,6 +57,80 @@ impl BackendType {
     }
 }
 
+#[derive(Parser)]
+#[command(name = "envchain")]
+#[command(version)]
+#[command(about = "Environment variables meet secret storage")]
+#[command(long_about = None)]
+struct Cli {
+    /// Backend type: 'secret-service', 'age', or 'wincred'
+    #[arg(long, global = true, value_name = "TYPE")]
+    backend: Option<String>,
+
+    /// Path to age identity file
+    #[arg(long, global = true, value_name = "PATH")]
+    age_identity: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+    
+    /// Namespace or comma-separated namespaces (for exec mode)
+    #[arg(value_name = "NAMESPACE")]
+    namespace: Option<String>,
+    
+    /// Command to execute (for exec mode)
+    #[arg(value_name = "COMMAND", requires = "namespace")]
+    exec_command: Option<String>,
+    
+    /// Arguments for the command (for exec mode)
+    #[arg(value_name = "ARGS", requires = "exec_command", trailing_var_arg = true, allow_hyphen_values = true)]
+    exec_args: Vec<String>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Set environment variables in a namespace
+    Set {
+        /// Namespace to store variables in
+        namespace: String,
+        
+        /// Environment variable names to set
+        #[arg(required = true)]
+        vars: Vec<String>,
+        
+        /// Do not echo user input
+        #[arg(short, long)]
+        noecho: bool,
+    },
+    
+    /// List namespaces or variables
+    List {
+        /// Namespace to list variables from (lists all namespaces if omitted)
+        namespace: Option<String>,
+        
+        /// Show values when listing
+        #[arg(short = 'v', long)]
+        show_value: bool,
+    },
+    
+    /// Remove variables from a namespace
+    Unset {
+        /// Namespace to remove variables from
+        namespace: String,
+        
+        /// Environment variable names to remove
+        #[arg(required = true)]
+        vars: Vec<String>,
+    },
+    
+    /// Generate shell completion script
+    GetCompletions {
+        /// Shell type
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+}
+
 fn create_backend(
     backend_type: BackendType,
     #[allow(unused_variables)] age_identity: Option<PathBuf>,
@@ -73,30 +149,8 @@ fn create_backend(
     }
 }
 
-fn print_help(prog: &str) {
-    eprintln!(
-        "{prog} (Rust)
-
-Usage:
-  Add variables
-    {prog} (--set|-s) [--noecho|-n] NAMESPACE ENV [ENV ..]
-  Execute with variables
-    {prog} NAMESPACE CMD [ARG ...]
-  List namespaces
-    {prog} --list
-  Remove variables
-    {prog} --unset NAMESPACE ENV [ENV ..]
-
-Backend options:
-  --backend <type>       Backend type: 'secret-service' (default), 'age', or 'wincred'
-  --age-identity <path>  Path to age identity file (SSH key or age identity)
-                         Can also be set via ENVCHAIN_AGE_IDENTITY env var
-
-Environment variables:
-  ENVCHAIN_BACKEND       Default backend ('secret-service', 'age', or 'wincred')
-  ENVCHAIN_AGE_IDENTITY  Path to age identity file for age backend
-"
-    );
+fn print_completions(shell: Shell, cmd: &mut clap::Command) {
+    clap_complete::generate(shell, cmd, cmd.get_name().to_string(), &mut std::io::stdout());
 }
 
 fn list_namespaces(backend: &dyn Backend) -> Result<(), String> {
@@ -190,142 +244,88 @@ fn exec_with(backend: &dyn Backend, name_csv: &str, cmd: &str, args: &[String]) 
 }
 
 fn main() {
-    let mut args: Vec<String> = env::args().collect();
-    let prog = args.remove(0);
-    if args.is_empty() {
-        print_help(&prog);
-        std::process::exit(2);
-    }
+    let cli = Cli::parse();
 
-    // Parse global options first
-    let mut backend_type = env::var("ENVCHAIN_BACKEND")
-        .ok()
-        .and_then(|s| BackendType::from_str(&s))
-        .unwrap_or_else(BackendType::default);
-    let mut age_identity: Option<PathBuf> = None;
-
-    // Extract global options
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--help" | "-h" => {
-                print_help(&prog);
-                std::process::exit(0);
+    // Handle get-completions subcommand first
+    if let Some(command) = &cli.command {
+        match command {
+            Commands::GetCompletions { shell } => {
+                let mut cmd = Cli::command();
+                print_completions(*shell, &mut cmd);
+                return;
             }
-            "--backend" => {
-                args.remove(i);
-                if i >= args.len() {
-                    eprintln!("--backend requires an argument");
-                    std::process::exit(2);
+            Commands::Set { namespace, vars, noecho } => {
+                let (backend_type, age_identity) = parse_backend_options(&cli);
+                let mut backend = create_backend_or_exit(backend_type, age_identity);
+                
+                if let Err(e) = set_values(backend.as_mut(), *noecho, namespace, vars) {
+                    eprintln!("{e}");
+                    std::process::exit(1);
                 }
-                let backend_str = args.remove(i);
-                backend_type = BackendType::from_str(&backend_str).unwrap_or_else(|| {
-                    eprintln!("Unknown backend: {backend_str}");
-                    eprintln!("Available: secret-service, age");
-                    std::process::exit(2);
-                });
+                return;
             }
-            "--age-identity" => {
-                args.remove(i);
-                if i >= args.len() {
-                    eprintln!("--age-identity requires an argument");
-                    std::process::exit(2);
+            Commands::List { namespace, show_value } => {
+                let (backend_type, age_identity) = parse_backend_options(&cli);
+                let backend = create_backend_or_exit(backend_type, age_identity);
+                
+                let res = if let Some(ns) = namespace {
+                    list_values(backend.as_ref(), ns, *show_value)
+                } else {
+                    list_namespaces(backend.as_ref())
+                };
+                
+                if let Err(e) = res {
+                    eprintln!("{e}");
+                    std::process::exit(1);
                 }
-                age_identity = Some(PathBuf::from(args.remove(i)));
+                return;
             }
-            _ => i += 1,
+            Commands::Unset { namespace, vars } => {
+                let (backend_type, age_identity) = parse_backend_options(&cli);
+                let mut backend = create_backend_or_exit(backend_type, age_identity);
+                
+                if let Err(e) = unset_values(backend.as_mut(), namespace, vars) {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
         }
     }
 
-    if args.is_empty() {
-        print_help(&prog);
+    // Default exec mode: envchain NAMESPACE COMMAND [ARGS...]
+    if let (Some(namespace), Some(command)) = (&cli.namespace, &cli.exec_command) {
+        let (backend_type, age_identity) = parse_backend_options(&cli);
+        let backend = create_backend_or_exit(backend_type, age_identity);
+        
+        if let Err(e) = exec_with(backend.as_ref(), namespace, command, &cli.exec_args) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    } else {
+        // No valid subcommand or exec mode - show help
+        eprintln!("Error: Missing subcommand or execution arguments\n");
+        Cli::command().print_help().ok();
         std::process::exit(2);
     }
+}
 
-    // Create backend
-    let mut backend = match create_backend(backend_type, age_identity) {
+fn parse_backend_options(cli: &Cli) -> (BackendType, Option<PathBuf>) {
+    let backend_env = env::var("ENVCHAIN_BACKEND").ok();
+    let backend_str = cli.backend.as_deref().or_else(|| backend_env.as_deref());
+    let backend_type = backend_str
+        .and_then(BackendType::from_str)
+        .unwrap_or_else(BackendType::default);
+    
+    (backend_type, cli.age_identity.clone())
+}
+
+fn create_backend_or_exit(backend_type: BackendType, age_identity: Option<PathBuf>) -> Box<dyn Backend> {
+    match create_backend(backend_type, age_identity) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
-        }
-    };
-
-    match args[0].as_str() {
-        "--set" | "-s" => {
-            args.remove(0);
-            let mut noecho = false;
-            while args.first().map(|s| s.starts_with('-')).unwrap_or(false) {
-                if args[0] == "--noecho" || args[0] == "-n" {
-                    noecho = true;
-                    args.remove(0);
-                } else {
-                    eprintln!("Unknown option: {}", args[0]);
-                    std::process::exit(1);
-                }
-            }
-            if args.len() < 2 {
-                print_help(&prog);
-                std::process::exit(2);
-            }
-            let name = args.remove(0);
-            if let Err(e) = set_values(backend.as_mut(), noecho, &name, &args) {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
-        }
-        "--list" | "-l" => {
-            args.remove(0);
-            let mut show_value = false;
-            let mut target: Option<String> = None;
-            while let Some(arg) = args.first() {
-                if arg == "-v" || arg == "--show-value" {
-                    show_value = true;
-                    args.remove(0);
-                } else {
-                    target = Some(args.remove(0));
-                }
-            }
-            let res = if let Some(t) = target {
-                list_values(backend.as_ref(), &t, show_value)
-            } else if show_value {
-                print_help(&prog);
-                std::process::exit(2);
-            } else {
-                list_namespaces(backend.as_ref())
-            };
-            if let Err(e) = res {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
-        }
-        "--unset" => {
-            args.remove(0);
-            if args.len() < 2 {
-                print_help(&prog);
-                std::process::exit(2);
-            }
-            let name = args.remove(0);
-            if let Err(e) = unset_values(backend.as_mut(), &name, &args) {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
-        }
-        s if s.starts_with('-') => {
-            eprintln!("Unknown option {}", s);
-            std::process::exit(2);
-        }
-        _ => {
-            if args.len() < 2 {
-                print_help(&prog);
-                std::process::exit(2);
-            }
-            let name_csv = args.remove(0);
-            let cmd = args.remove(0);
-            if let Err(e) = exec_with(backend.as_ref(), &name_csv, &cmd, &args) {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
         }
     }
 }

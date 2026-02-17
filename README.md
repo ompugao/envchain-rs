@@ -66,13 +66,13 @@ cargo build --release --no-default-features --features windows-credential-manage
 Environment variables are stored within a specified *namespace*. You can set variables in a single command:
 
 ```bash
-envchain --set NAMESPACE ENV [ENV ..]
+envchain set NAMESPACE ENV [ENV ..]
 ```
 
 You will be prompted to enter the values for each variable. For example, set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` within a namespace called `aws`:
 
 ```bash
-$ envchain --set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+$ envchain set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 aws.AWS_ACCESS_KEY_ID: my-access-key
 aws.AWS_SECRET_ACCESS_KEY: secret
 ```
@@ -100,31 +100,30 @@ AWS_SECRET_ACCESS_KEY=secret
 HUBOT_HIPCHAT_PASSWORD=xxxx
 ```
 
-### Options
+### Commands
 
-#### `--set`, `-s`
+#### `set`
 
 Set environment variables in a namespace:
 
 ```bash
-envchain --set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+envchain set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 ```
 
-#### `--noecho`, `-n`
+##### `--noecho`, `-n`
 
 Do not echo user input when setting variables:
 
 ```bash
-$ envchain --set --noecho foo BAR
-foo.BAR (noecho):
+envchain set --noecho foo BAR
 ```
 
-#### `--list`, `-l`
+#### `list`
 
 List all namespaces:
 
 ```bash
-$ envchain --list
+$ envchain list
 aws
 hubot
 ```
@@ -132,7 +131,7 @@ hubot
 List variables in a specific namespace:
 
 ```bash
-$ envchain --list aws
+$ envchain list aws
 AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY
 ```
@@ -140,18 +139,22 @@ AWS_SECRET_ACCESS_KEY
 List variables with their values:
 
 ```bash
-$ envchain --list --show-value aws
+$ envchain list --show-value aws
 AWS_ACCESS_KEY_ID=my-access-key
 AWS_SECRET_ACCESS_KEY=secret
 ```
 
-#### `--unset`
+#### `unset`
 
 Remove variables from a namespace:
 
 ```bash
-envchain --unset aws AWS_ACCESS_KEY_ID
+envchain unset aws AWS_ACCESS_KEY_ID
 ```
+
+#### `get-completions`
+
+Generate shell completion script (see [Shell Completion](#shell-completion) section below).
 
 ### Backend Selection
 
@@ -164,13 +167,13 @@ Select the storage backend:
 
 ```bash
 # Use age backend
-envchain --backend age --set aws AWS_ACCESS_KEY_ID
+envchain --backend age set aws AWS_ACCESS_KEY_ID
 
 # Use secret-service backend explicitly
-envchain --backend secret-service --set aws AWS_ACCESS_KEY_ID
+envchain --backend secret-service set aws AWS_ACCESS_KEY_ID
 
 # Use Windows Credential Manager (on Windows/WSL2)
-envchain --backend wincred --set aws AWS_ACCESS_KEY_ID
+envchain --backend wincred set aws AWS_ACCESS_KEY_ID
 ```
 
 #### `--age-identity <path>`
@@ -178,7 +181,7 @@ envchain --backend wincred --set aws AWS_ACCESS_KEY_ID
 Specify the age identity file (SSH private key or age identity):
 
 ```bash
-envchain --backend age --age-identity ~/.ssh/id_ed25519 --set aws AWS_ACCESS_KEY_ID
+envchain --backend age --age-identity ~/.ssh/id_ed25519 set aws AWS_ACCESS_KEY_ID
 ```
 
 ### Environment Variables
@@ -187,6 +190,26 @@ envchain --backend age --age-identity ~/.ssh/id_ed25519 --set aws AWS_ACCESS_KEY
 |----------|-------------|
 | `ENVCHAIN_BACKEND` | Default backend (`secret-service`, `age`, or `wincred`) |
 | `ENVCHAIN_AGE_IDENTITY` | Path to age identity file for age backend |
+
+## Shell Completion
+
+Generate shell completion scripts for bash, fish, or zsh:
+
+```bash
+# Bash (add to ~/.bashrc)
+source <(envchain get-completions bash)
+
+# Fish (add to ~/.config/fish/config.fish)
+envchain get-completions fish | source
+
+# Zsh (add to ~/.zshrc)
+source <(envchain get-completions zsh)
+```
+
+The completions provide intelligent suggestions for:
+- Subcommands and options
+- Available namespaces (dynamically queried from the backend)
+- Environment variable names within namespaces
 
 ## Age Backend Details
 
@@ -201,7 +224,7 @@ You can use your existing SSH keys:
 export ENVCHAIN_BACKEND=age
 export ENVCHAIN_AGE_IDENTITY=~/.ssh/id_ed25519
 
-envchain --set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+envchain set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 envchain aws aws s3 ls
 ```
 
@@ -218,7 +241,7 @@ If no identity is specified, a native age identity is auto-generated at `~/.conf
 
 ```bash
 export ENVCHAIN_BACKEND=age
-envchain --set aws AWS_ACCESS_KEY_ID  # Auto-generates identity on first use
+envchain set aws AWS_ACCESS_KEY_ID  # Auto-generates identity on first use
 ```
 
 ### Passphrase Handling
@@ -239,7 +262,7 @@ The Windows Credential Manager backend provides native credential storage on Win
 cargo build --release --no-default-features --features windows-credential-manager
 
 # Use it
-envchain --backend wincred --set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+envchain --backend wincred set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 envchain aws aws s3 ls
 ```
 
@@ -252,7 +275,7 @@ The Windows backend works seamlessly from WSL2, storing credentials in the Windo
 export ENVCHAIN_BACKEND=wincred
 
 # Credentials are stored in Windows Credential Manager
-envchain --set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+envchain set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 # Access from WSL2
 envchain aws aws s3 ls
@@ -263,10 +286,11 @@ Credentials are stored with target names like `envchain:aws:AWS_ACCESS_KEY_ID` a
 ## Differences from original envchain
 
 - **Cross-platform backends**: Supports Linux (D-Bus Secret Service), Windows/WSL2 (Credential Manager), and portable age encryption
+- **Command-based interface**: Cleaner subcommand structure (`set`, `list`, `unset`, `get-completions`)
+- **Shell completions**: Built-in completion generation for bash, fish, and zsh
 - **Additional features**:
-  - `--unset` to remove stored variables
-  - `--list NAMESPACE` to list variables within a namespace
-  - `--list --show-value NAMESPACE` to display variable values
+  - `unset` command to remove stored variables
+  - `list` command with optional namespace and value display
   - `--backend` to select storage backend
   - Age backend for portable, platform-independent operation
   - Windows Credential Manager for native Windows/WSL2 support
