@@ -6,8 +6,8 @@
 //! Credentials are stored with target names: envchain:{namespace}:{key}
 
 use super::{Backend, EnvKey, EnvValue, Namespace};
-use keyring_core::api::CredentialStoreApi;
 use keyring_core::Error as KeyringError;
+use keyring_core::api::CredentialStoreApi;
 use std::collections::HashMap;
 use std::sync::Arc;
 use windows_native_keyring_store::Store;
@@ -76,7 +76,11 @@ impl Backend for WindowsCredentialManagerBackend {
     fn list_secrets(&self, namespace: &str) -> Result<HashMap<EnvKey, EnvValue>, String> {
         // Search for all credentials with our prefix
         let mut search_spec: HashMap<&str, &str> = HashMap::new();
-        let pattern = format!("^{}{}:", regex::escape(TARGET_PREFIX), regex::escape(namespace));
+        let pattern = format!(
+            "^{}{}:",
+            regex::escape(TARGET_PREFIX),
+            regex::escape(namespace)
+        );
         search_spec.insert("pattern", pattern.as_str());
 
         let entries = self
@@ -133,12 +137,10 @@ impl Backend for WindowsCredentialManagerBackend {
             .build(key, namespace, None)
             .map_err(|e| format!("Failed to build credential entry: {e}"))?;
 
-        entry
-            .delete_credential()
-            .map_err(|e| match e {
-                KeyringError::NoEntry => format!("Credential not found for {namespace}:{key}"),
-                _ => format!("Failed to delete credential: {e}"),
-            })?;
+        entry.delete_credential().map_err(|e| match e {
+            KeyringError::NoEntry => format!("Credential not found for {namespace}:{key}"),
+            _ => format!("Failed to delete credential: {e}"),
+        })?;
 
         Ok(())
     }

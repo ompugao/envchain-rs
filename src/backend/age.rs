@@ -53,8 +53,7 @@ impl AgeBackend {
             .ok_or("Could not determine config directory")?
             .join("envchain");
 
-        fs::create_dir_all(&config_dir)
-            .map_err(|e| format!("Failed to create config dir: {e}"))?;
+        fs::create_dir_all(&config_dir).map_err(|e| format!("Failed to create config dir: {e}"))?;
 
         // Restrict config directory to owner only so others cannot list its contents.
         #[cfg(unix)]
@@ -70,8 +69,11 @@ impl AgeBackend {
 
         // Distinguish explicitly-provided paths from the default so that
         // ensure_identity knows whether to auto-generate or error out.
-        let explicit_identity = identity_path
-            .or_else(|| std::env::var("ENVCHAIN_AGE_IDENTITY").ok().map(PathBuf::from));
+        let explicit_identity = identity_path.or_else(|| {
+            std::env::var("ENVCHAIN_AGE_IDENTITY")
+                .ok()
+                .map(PathBuf::from)
+        });
 
         let is_default_identity = explicit_identity.is_none();
         let identity_path = explicit_identity.unwrap_or(default_identity_path);
@@ -109,7 +111,10 @@ impl AgeBackend {
         }
 
         // Generate a new native age identity at the default location.
-        eprintln!("Generating new age identity at {}", self.identity_path.display());
+        eprintln!(
+            "Generating new age identity at {}",
+            self.identity_path.display()
+        );
         let identity = age::x25519::Identity::generate();
         let recipient = identity.to_public();
 
@@ -160,10 +165,12 @@ impl AgeBackend {
 
     /// Load identities from file (supports SSH and native age identities).
     fn load_identities(&self) -> Result<Vec<Box<dyn age::Identity>>, String> {
-        let identity_bytes = Zeroizing::new(
-            fs::read(&self.identity_path)
-                .map_err(|e| format!("Failed to read identity file {}: {e}", self.identity_path.display()))?,
-        );
+        let identity_bytes = Zeroizing::new(fs::read(&self.identity_path).map_err(|e| {
+            format!(
+                "Failed to read identity file {}: {e}",
+                self.identity_path.display()
+            )
+        })?);
 
         // Detect OpenSSH / PEM format by the "-----BEGIN" header.
         if identity_bytes.windows(10).any(|w| w == b"-----BEGIN") {
@@ -299,7 +306,8 @@ impl AgeBackend {
         // tempfile creates the file with O_CREAT | O_EXCL | mode 0o600 on Unix,
         // so the permissions are correct from the start and survive the rename
         // without a subsequent chmod call.
-        let parent = self.secrets_path
+        let parent = self
+            .secrets_path
             .parent()
             .ok_or("Could not determine secrets file parent directory")?;
         let mut temp_file = tempfile::NamedTempFile::new_in(parent)

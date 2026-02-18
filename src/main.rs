@@ -74,17 +74,22 @@ struct Cli {
 
     #[command(subcommand)]
     command: Option<Commands>,
-    
+
     /// Namespace or comma-separated namespaces (for exec mode)
     #[arg(value_name = "NAMESPACE")]
     namespace: Option<String>,
-    
+
     /// Command to execute (for exec mode)
     #[arg(value_name = "COMMAND", requires = "namespace")]
     exec_command: Option<String>,
-    
+
     /// Arguments for the command (for exec mode)
-    #[arg(value_name = "ARGS", requires = "exec_command", trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(
+        value_name = "ARGS",
+        requires = "exec_command",
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
     exec_args: Vec<String>,
 }
 
@@ -94,36 +99,36 @@ enum Commands {
     Set {
         /// Namespace to store variables in
         namespace: String,
-        
+
         /// Environment variable names to set
         #[arg(required = true)]
         vars: Vec<String>,
-        
+
         /// Do not echo user input
         #[arg(short, long)]
         noecho: bool,
     },
-    
+
     /// List namespaces or variables
     List {
         /// Namespace to list variables from (lists all namespaces if omitted)
         namespace: Option<String>,
-        
+
         /// Show values when listing
         #[arg(short = 'v', long)]
         show_value: bool,
     },
-    
+
     /// Remove variables from a namespace
     Unset {
         /// Namespace to remove variables from
         namespace: String,
-        
+
         /// Environment variable names to remove
         #[arg(required = true)]
         vars: Vec<String>,
     },
-    
+
     /// Generate shell completion script
     GetCompletions {
         /// Shell type
@@ -138,9 +143,9 @@ fn create_backend(
 ) -> Result<Box<dyn Backend>, String> {
     match backend_type {
         #[cfg(feature = "secret-service-backend")]
-        BackendType::SecretService => {
-            Ok(Box::new(backend::secret_service::SecretServiceBackend::new()?))
-        }
+        BackendType::SecretService => Ok(Box::new(
+            backend::secret_service::SecretServiceBackend::new()?,
+        )),
         #[cfg(feature = "age-backend")]
         BackendType::Age => Ok(Box::new(backend::age::AgeBackend::new(age_identity)?)),
         #[cfg(feature = "windows-credential-manager")]
@@ -151,7 +156,12 @@ fn create_backend(
 }
 
 fn print_completions(shell: Shell, cmd: &mut clap::Command) {
-    clap_complete::generate(shell, cmd, cmd.get_name().to_string(), &mut std::io::stdout());
+    clap_complete::generate(
+        shell,
+        cmd,
+        cmd.get_name().to_string(),
+        &mut std::io::stdout(),
+    );
 }
 
 fn list_namespaces(backend: &dyn Backend) -> Result<(), String> {
@@ -185,7 +195,12 @@ fn list_values(backend: &dyn Backend, target: &str, show_value: bool) -> Result<
     Ok(())
 }
 
-fn set_values(backend: &mut dyn Backend, noecho: bool, name: &str, keys: &[String]) -> Result<(), String> {
+fn set_values(
+    backend: &mut dyn Backend,
+    noecho: bool,
+    name: &str,
+    keys: &[String],
+) -> Result<(), String> {
     for key in keys {
         let prompt = format!("{name}.{key}");
         let value: Zeroizing<String> = if noecho {
@@ -214,7 +229,12 @@ fn unset_values(backend: &mut dyn Backend, name: &str, keys: &[String]) -> Resul
     Ok(())
 }
 
-fn exec_with(backend: Box<dyn Backend>, name_csv: &str, cmd: &str, args: &[String]) -> Result<(), String> {
+fn exec_with(
+    backend: Box<dyn Backend>,
+    name_csv: &str,
+    cmd: &str,
+    args: &[String],
+) -> Result<(), String> {
     // Collect all secrets before touching the environment.
     let mut env_pairs: Vec<(String, Zeroizing<String>)> = Vec::new();
     let mut keys: Vec<String> = Vec::new();
@@ -272,26 +292,33 @@ fn main() {
                 print_completions(*shell, &mut cmd);
                 return;
             }
-            Commands::Set { namespace, vars, noecho } => {
+            Commands::Set {
+                namespace,
+                vars,
+                noecho,
+            } => {
                 let (backend_type, age_identity) = parse_backend_options(&cli);
                 let mut backend = create_backend_or_exit(backend_type, age_identity);
-                
+
                 if let Err(e) = set_values(backend.as_mut(), *noecho, namespace, vars) {
                     eprintln!("{e}");
                     std::process::exit(1);
                 }
                 return;
             }
-            Commands::List { namespace, show_value } => {
+            Commands::List {
+                namespace,
+                show_value,
+            } => {
                 let (backend_type, age_identity) = parse_backend_options(&cli);
                 let backend = create_backend_or_exit(backend_type, age_identity);
-                
+
                 let res = if let Some(ns) = namespace {
                     list_values(backend.as_ref(), ns, *show_value)
                 } else {
                     list_namespaces(backend.as_ref())
                 };
-                
+
                 if let Err(e) = res {
                     eprintln!("{e}");
                     std::process::exit(1);
@@ -301,7 +328,7 @@ fn main() {
             Commands::Unset { namespace, vars } => {
                 let (backend_type, age_identity) = parse_backend_options(&cli);
                 let mut backend = create_backend_or_exit(backend_type, age_identity);
-                
+
                 if let Err(e) = unset_values(backend.as_mut(), namespace, vars) {
                     eprintln!("{e}");
                     std::process::exit(1);
@@ -315,7 +342,7 @@ fn main() {
     if let (Some(namespace), Some(command)) = (&cli.namespace, &cli.exec_command) {
         let (backend_type, age_identity) = parse_backend_options(&cli);
         let backend = create_backend_or_exit(backend_type, age_identity);
-        
+
         if let Err(e) = exec_with(backend, namespace, command, &cli.exec_args) {
             eprintln!("{e}");
             std::process::exit(1);
@@ -334,11 +361,14 @@ fn parse_backend_options(cli: &Cli) -> (BackendType, Option<PathBuf>) {
     let backend_type = backend_str
         .and_then(BackendType::from_str)
         .unwrap_or_else(BackendType::default);
-    
+
     (backend_type, cli.age_identity.clone())
 }
 
-fn create_backend_or_exit(backend_type: BackendType, age_identity: Option<PathBuf>) -> Box<dyn Backend> {
+fn create_backend_or_exit(
+    backend_type: BackendType,
+    age_identity: Option<PathBuf>,
+) -> Box<dyn Backend> {
     match create_backend(backend_type, age_identity) {
         Ok(b) => b,
         Err(e) => {
