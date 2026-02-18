@@ -214,16 +214,29 @@ fn unset_values(backend: &mut dyn Backend, name: &str, keys: &[String]) -> Resul
     Ok(())
 }
 
-fn exec_with(backend: &dyn Backend, name_csv: &str, cmd: &str, args: &[String]) -> Result<(), String> {
+fn exec_with(backend: Box<dyn Backend>, name_csv: &str, cmd: &str, args: &[String]) -> Result<(), String> {
+    // Collect all secrets before touching the environment.
+    let mut env_pairs: Vec<(String, Zeroizing<String>)> = Vec::new();
     let mut keys: Vec<String> = Vec::new();
     for name in name_csv.split(',') {
         let secrets = backend.list_secrets(name)?;
         for (key, val) in secrets {
-            // SAFETY: We are the only thread running at this point before exec,
-            // and we're about to replace this process with exec anyway.
-            unsafe { env::set_var(&key, &val) };
+            env_pairs.push((key.clone(), Zeroizing::new(val)));
             keys.push(key);
         }
+    }
+
+    // Drop the backend explicitly before mutating the environment.
+    // The secret-service backend's async-io reactor thread does not access the
+    // process environment, but dropping here ensures no backend-owned threads
+    // are running when set_var is called, making the unsafety below sound.
+    drop(backend);
+
+    // SAFETY: This program is single-threaded at this point — the backend
+    // (and any threads it owns) has been dropped above.  No other thread can
+    // be reading the process environment concurrently, so set_var is sound.
+    for (key, val) in &env_pairs {
+        unsafe { env::set_var(key, val.as_str()) };
     }
 
     // On Windows, append secret keys to WSLENV so they are forwarded
@@ -237,6 +250,7 @@ fn exec_with(backend: &dyn Backend, name_csv: &str, cmd: &str, args: &[String]) 
             }
             wslenv.push_str(key);
         }
+        // SAFETY: same invariant as above — single-threaded after backend drop.
         unsafe { env::set_var("WSLENV", &wslenv) };
     }
 
@@ -302,7 +316,7 @@ fn main() {
         let (backend_type, age_identity) = parse_backend_options(&cli);
         let backend = create_backend_or_exit(backend_type, age_identity);
         
-        if let Err(e) = exec_with(backend.as_ref(), namespace, command, &cli.exec_args) {
+        if let Err(e) = exec_with(backend, namespace, command, &cli.exec_args) {
             eprintln!("{e}");
             std::process::exit(1);
         }
