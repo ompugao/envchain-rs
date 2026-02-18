@@ -7,6 +7,7 @@ use rpassword::read_password;
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BackendType {
@@ -187,16 +188,19 @@ fn list_values(backend: &dyn Backend, target: &str, show_value: bool) -> Result<
 fn set_values(backend: &mut dyn Backend, noecho: bool, name: &str, keys: &[String]) -> Result<(), String> {
     for key in keys {
         let prompt = format!("{name}.{key}");
-        let value = if noecho {
+        let value: Zeroizing<String> = if noecho {
             eprint!("{prompt} (noecho):");
-            read_password().map_err(|e| format!("Failed to read password: {e}"))?
+            read_password()
+                .map(Zeroizing::new)
+                .map_err(|e| format!("Failed to read password: {e}"))?
         } else {
             eprint!("{prompt}: ");
-            let mut buf = String::new();
+            let mut buf = Zeroizing::new(String::new());
             std::io::stdin()
                 .read_line(&mut buf)
                 .map_err(|e| format!("Failed to read line: {e}"))?;
-            buf.trim_end_matches(['\n', '\r']).to_string()
+            let trimmed = buf.trim_end_matches(['\n', '\r']).to_string();
+            Zeroizing::new(trimmed)
         };
         backend.set_secret(name, key, &value)?;
     }
