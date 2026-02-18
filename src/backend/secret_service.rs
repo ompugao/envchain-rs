@@ -56,7 +56,8 @@ impl Backend for SecretServiceBackend {
                 continue;
             };
             if let Ok(secret) = item.get_secret() {
-                let val = String::from_utf8_lossy(&secret).to_string();
+                let val = String::from_utf8(secret)
+                    .map_err(|e| format!("Secret for {key} is not valid UTF-8: {e}"))?;
                 secrets.insert(key.clone(), val);
             }
         }

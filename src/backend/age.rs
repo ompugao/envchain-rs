@@ -16,9 +16,29 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 type SecretsStore = HashMap<Namespace, HashMap<EnvKey, EnvValue>>;
+
+/// On Windows, restrict `path` to the current user only by removing inherited
+/// ACEs and granting Full Control exclusively to the current user.
+/// Uses the built-in `icacls` command — no extra dependencies required.
+#[cfg(target_os = "windows")]
+fn restrict_identity_file_to_owner(path: &PathBuf) -> Result<(), String> {
+    let username = std::env::var("USERNAME")
+        .map_err(|_| "USERNAME environment variable not set".to_string())?;
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{username}:F"))
+        .status()
+        .map_err(|e| format!("Failed to run icacls: {e}"))?;
+    if !status.success() {
+        return Err(format!("icacls exited with failure for {}", path.display()));
+    }
+    Ok(())
+}
 
 pub struct AgeBackend {
     secrets_path: PathBuf,
@@ -110,8 +130,24 @@ impl AgeBackend {
         }
         #[cfg(not(unix))]
         {
-            fs::write(&self.identity_path, identity.to_string().expose_secret())
+            // Use create_new to prevent races (no O_EXCL mode bits on non-Unix,
+            // but create_new still maps to CREATE_NEW on Windows).
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&self.identity_path)
+                .map_err(|e| format!("Failed to create identity file: {e}"))?;
+            file.write_all(identity.to_string().expose_secret().as_bytes())
                 .map_err(|e| format!("Failed to write identity: {e}"))?;
+            drop(file);
+
+            // Restrict the identity file to the current user only.
+            // Windows does not have Unix mode bits, so use icacls to remove
+            // inherited ACEs and grant Full Control exclusively to the owner.
+            #[cfg(target_os = "windows")]
+            if let Err(e) = restrict_identity_file_to_owner(&self.identity_path) {
+                eprintln!("Warning: could not restrict identity file permissions: {e}");
+            }
         }
 
         // Save recipient (public key) for convenience — not sensitive.
@@ -279,6 +315,16 @@ impl AgeBackend {
             .map_err(|e| format!("Failed to rename secrets file: {e}"))?;
 
         Ok(())
+    }
+}
+
+impl Drop for AgeBackend {
+    fn drop(&mut self) {
+        for inner in self.secrets.values_mut() {
+            for val in inner.values_mut() {
+                val.zeroize();
+            }
+        }
     }
 }
 
