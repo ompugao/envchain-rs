@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use zeroize::Zeroizing;
 
 type SecretsStore = HashMap<Namespace, HashMap<EnvKey, EnvValue>>;
 
@@ -35,13 +36,25 @@ impl AgeBackend {
         fs::create_dir_all(&config_dir)
             .map_err(|e| format!("Failed to create config dir: {e}"))?;
 
+        // Restrict config directory to owner only so others cannot list its contents.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700))
+                .map_err(|e| format!("Failed to set config dir permissions: {e}"))?;
+        }
+
         let secrets_path = config_dir.join("secrets.age");
         let default_identity_path = config_dir.join("identity.txt");
         let recipient_path = config_dir.join("recipient.txt");
 
-        let identity_path = identity_path
-            .or_else(|| std::env::var("ENVCHAIN_AGE_IDENTITY").ok().map(PathBuf::from))
-            .unwrap_or(default_identity_path);
+        // Distinguish explicitly-provided paths from the default so that
+        // ensure_identity knows whether to auto-generate or error out.
+        let explicit_identity = identity_path
+            .or_else(|| std::env::var("ENVCHAIN_AGE_IDENTITY").ok().map(PathBuf::from));
+
+        let is_default_identity = explicit_identity.is_none();
+        let identity_path = explicit_identity.unwrap_or(default_identity_path);
 
         let mut backend = Self {
             secrets_path,
@@ -50,46 +63,58 @@ impl AgeBackend {
             secrets: HashMap::new(),
         };
 
-        backend.ensure_identity()?;
+        backend.ensure_identity(is_default_identity)?;
         backend.load_secrets()?;
 
         Ok(backend)
     }
 
-    /// Ensure we have an identity (generate native age identity if needed)
-    fn ensure_identity(&self) -> Result<(), String> {
+    /// Ensure we have an identity file.
+    ///
+    /// When `is_default_path` is true and the file is absent, a new native age
+    /// identity is generated.  When false (user supplied a path explicitly) and
+    /// the file is absent, a clear error is returned without any auto-generation.
+    fn ensure_identity(&self, is_default_path: bool) -> Result<(), String> {
         if self.identity_path.exists() {
             return Ok(());
         }
 
-        // Check if it's an SSH key path that doesn't exist
-        let path_str = self.identity_path.to_string_lossy();
-        if path_str.contains(".ssh/") || path_str.ends_with(".pub") {
+        if !is_default_path {
             return Err(format!(
-                "SSH identity file not found: {}\nGenerate with: ssh-keygen -t ed25519 -f {}",
-                self.identity_path.display(),
-                self.identity_path.display()
+                "Identity file not found: {path}\n\
+                 For SSH keys:       ssh-keygen -t ed25519 -f {path}\n\
+                 For age identities: age-keygen -o {path}",
+                path = self.identity_path.display()
             ));
         }
 
-        // Generate a new native age identity
+        // Generate a new native age identity at the default location.
         eprintln!("Generating new age identity at {}", self.identity_path.display());
         let identity = age::x25519::Identity::generate();
         let recipient = identity.to_public();
 
-        // Save identity
-        fs::write(&self.identity_path, identity.to_string().expose_secret())
-            .map_err(|e| format!("Failed to write identity: {e}"))?;
-
-        // Restrict permissions on identity file
+        // Open with O_CREAT | O_EXCL and mode 0o600 in a single syscall so
+        // that (a) the file is never world-readable even briefly and (b) a
+        // pre-existing symlink cannot redirect the write.
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&self.identity_path, fs::Permissions::from_mode(0o600))
-                .map_err(|e| format!("Failed to set identity permissions: {e}"))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&self.identity_path)
+                .map_err(|e| format!("Failed to create identity file: {e}"))?;
+            file.write_all(identity.to_string().expose_secret().as_bytes())
+                .map_err(|e| format!("Failed to write identity: {e}"))?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(&self.identity_path, identity.to_string().expose_secret())
+                .map_err(|e| format!("Failed to write identity: {e}"))?;
         }
 
-        // Save recipient (public key) for convenience
+        // Save recipient (public key) for convenience — not sensitive.
         fs::write(&self.recipient_path, recipient.to_string())
             .map_err(|e| format!("Failed to write recipient: {e}"))?;
 
@@ -97,24 +122,25 @@ impl AgeBackend {
         Ok(())
     }
 
-    /// Load identities from file (supports SSH and native age identities)
+    /// Load identities from file (supports SSH and native age identities).
     fn load_identities(&self) -> Result<Vec<Box<dyn age::Identity>>, String> {
-        let identity_bytes = fs::read(&self.identity_path)
-            .map_err(|e| format!("Failed to read identity file {}: {e}", self.identity_path.display()))?;
-        let identity_str = String::from_utf8_lossy(&identity_bytes);
+        let identity_bytes = Zeroizing::new(
+            fs::read(&self.identity_path)
+                .map_err(|e| format!("Failed to read identity file {}: {e}", self.identity_path.display()))?,
+        );
 
-        // Try as SSH private key first (OpenSSH format starts with "-----BEGIN")
-        if identity_str.contains("-----BEGIN") {
+        // Detect OpenSSH / PEM format by the "-----BEGIN" header.
+        if identity_bytes.windows(10).any(|w| w == b"-----BEGIN") {
             let identity = age::ssh::Identity::from_buffer(identity_bytes.as_slice(), None)
                 .map_err(|e| format!("Failed to parse SSH key: {e}"))?;
             return Ok(vec![Box::new(identity)]);
         }
 
-        // Try parsing as age identity file
+        // Try parsing as age identity file.
         let identities = age::IdentityFile::from_buffer(identity_bytes.as_slice())
             .map_err(|e| format!("Failed to parse identity file: {e}"))?;
 
-        // Convert to boxed identities, prompting for passphrase if needed
+        // Convert to boxed identities, prompting for passphrase if needed.
         let identities: Vec<Box<dyn age::Identity>> = identities
             .into_identities()
             .map_err(|e| format!("Failed to process identities: {e}"))?;
@@ -126,24 +152,25 @@ impl AgeBackend {
         Ok(identities)
     }
 
-    /// Get recipient for encryption
+    /// Get recipient for encryption.
     fn get_recipient(&self) -> Result<Box<dyn age::Recipient + Send>, String> {
-        let identity_str = fs::read_to_string(&self.identity_path)
-            .map_err(|e| format!("Failed to read identity file: {e}"))?;
+        let identity_str = Zeroizing::new(
+            fs::read_to_string(&self.identity_path)
+                .map_err(|e| format!("Failed to read identity file: {e}"))?,
+        );
 
-        // Try as native age identity first
+        // Try as native age identity first.
         if let Ok(identity) = identity_str.trim().parse::<age::x25519::Identity>() {
             return Ok(Box::new(identity.to_public()));
         }
 
-        // Try as SSH key
+        // Try as SSH key — look for an SSH public key line inside the identity file.
         for line in identity_str.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            
-            // Check for SSH public key format in the identity file
+
             if line.starts_with("ssh-")
                 && let Ok(recipient) = line.parse::<age::ssh::Recipient>()
             {
@@ -151,11 +178,13 @@ impl AgeBackend {
             }
         }
 
-        // Try to read corresponding .pub file for SSH private keys
+        // Try to read a corresponding .pub file for SSH private keys.
         let pub_path = PathBuf::from(format!("{}.pub", self.identity_path.display()));
         if pub_path.exists() {
-            let pub_str = fs::read_to_string(&pub_path)
-                .map_err(|e| format!("Failed to read public key file: {e}"))?;
+            let pub_str = Zeroizing::new(
+                fs::read_to_string(&pub_path)
+                    .map_err(|e| format!("Failed to read public key file: {e}"))?,
+            );
             for line in pub_str.lines() {
                 let line = line.trim();
                 if line.starts_with("ssh-")
@@ -169,7 +198,7 @@ impl AgeBackend {
         Err("Could not determine recipient from identity file".to_string())
     }
 
-    /// Load and decrypt secrets from file
+    /// Load and decrypt secrets from file.
     fn load_secrets(&mut self) -> Result<(), String> {
         if !self.secrets_path.exists() {
             self.secrets = HashMap::new();
@@ -189,24 +218,28 @@ impl AgeBackend {
         let decryptor = age::Decryptor::new(&encrypted[..])
             .map_err(|e| format!("Failed to create decryptor: {e}"))?;
 
-        let mut decrypted = vec![];
+        // Wrap in Zeroizing so the plaintext is wiped from memory on drop.
+        let mut decrypted = Zeroizing::new(vec![]);
         let mut reader = decryptor
             .decrypt(identities.iter().map(|i| i.as_ref()))
             .map_err(|e| format!("Decryption failed: {e}"))?;
         reader
-            .read_to_end(&mut decrypted)
+            .read_to_end(&mut *decrypted)
             .map_err(|e| format!("Failed to read decrypted data: {e}"))?;
 
-        self.secrets = serde_json::from_slice(&decrypted)
+        self.secrets = serde_json::from_slice(decrypted.as_slice())
             .map_err(|e| format!("Failed to parse secrets JSON: {e}"))?;
 
         Ok(())
     }
 
-    /// Encrypt and save secrets to file
+    /// Encrypt and save secrets to file.
     fn save_secrets(&self) -> Result<(), String> {
-        let json = serde_json::to_string_pretty(&self.secrets)
-            .map_err(|e| format!("Failed to serialize secrets: {e}"))?;
+        // Wrap in Zeroizing so the plaintext JSON is wiped from memory on drop.
+        let json = Zeroizing::new(
+            serde_json::to_string_pretty(&self.secrets)
+                .map_err(|e| format!("Failed to serialize secrets: {e}"))?,
+        );
 
         let recipient = self.get_recipient()?;
         let recipients: Vec<&dyn age::Recipient> = vec![recipient.as_ref()];
@@ -225,19 +258,25 @@ impl AgeBackend {
             .finish()
             .map_err(|e| format!("Failed to finish encryption: {e}"))?;
 
-        // Write atomically via temp file
-        let temp_path = self.secrets_path.with_extension("tmp");
-        fs::write(&temp_path, &encrypted)
+        // Write atomically via a unique temp file created in the same directory
+        // as secrets.age (same filesystem → rename is atomic).
+        // tempfile creates the file with O_CREAT | O_EXCL | mode 0o600 on Unix,
+        // so the permissions are correct from the start and survive the rename
+        // without a subsequent chmod call.
+        let parent = self.secrets_path
+            .parent()
+            .ok_or("Could not determine secrets file parent directory")?;
+        let mut temp_file = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|e| format!("Failed to create temp file: {e}"))?;
+        temp_file
+            .write_all(&encrypted)
             .map_err(|e| format!("Failed to write temp file: {e}"))?;
-        fs::rename(&temp_path, &self.secrets_path)
+        temp_file
+            .flush()
+            .map_err(|e| format!("Failed to flush temp file: {e}"))?;
+        temp_file
+            .persist(&self.secrets_path)
             .map_err(|e| format!("Failed to rename secrets file: {e}"))?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&self.secrets_path, fs::Permissions::from_mode(0o600))
-                .map_err(|e| format!("Failed to set secrets file permissions: {e}"))?;
-        }
 
         Ok(())
     }
