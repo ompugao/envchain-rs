@@ -732,7 +732,9 @@ dependencies = [
  "secret-service",
  "serde",
  "serde_json",
+ "tempfile",
  "windows-native-keyring-store",
+ "zeroize",
 ]
 
 [[package]]
