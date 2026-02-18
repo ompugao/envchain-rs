@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 type SecretsStore = HashMap<Namespace, HashMap<EnvKey, EnvValue>>;
 
@@ -279,6 +279,16 @@ impl AgeBackend {
             .map_err(|e| format!("Failed to rename secrets file: {e}"))?;
 
         Ok(())
+    }
+}
+
+impl Drop for AgeBackend {
+    fn drop(&mut self) {
+        for inner in self.secrets.values_mut() {
+            for val in inner.values_mut() {
+                val.zeroize();
+            }
+        }
     }
 }
 
