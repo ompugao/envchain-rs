@@ -76,7 +76,7 @@ impl Backend for WindowsCredentialManagerBackend {
     fn list_secrets(&self, namespace: &str) -> Result<HashMap<EnvKey, EnvValue>, String> {
         // Search for all credentials with our prefix
         let mut search_spec: HashMap<&str, &str> = HashMap::new();
-        let pattern = format!("^{}{namespace}:", regex::escape(TARGET_PREFIX));
+        let pattern = format!("^{}{}:", regex::escape(TARGET_PREFIX), regex::escape(namespace));
         search_spec.insert("pattern", pattern.as_str());
 
         let entries = self
