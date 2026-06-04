@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "envchain-rs"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "age",
  "async-io 1.13.0",
