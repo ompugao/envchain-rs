@@ -17,6 +17,8 @@ enum BackendType {
     Age,
     #[cfg(feature = "windows-credential-manager")]
     WindowsCredentialManager,
+    #[cfg(feature = "rbw-backend")]
+    Rbw,
 }
 
 impl BackendType {
@@ -30,6 +32,8 @@ impl BackendType {
             "wincred" | "windows-credential-manager" | "windows" => {
                 Some(Self::WindowsCredentialManager)
             }
+            #[cfg(feature = "rbw-backend")]
+            "rbw" | "bitwarden" | "bw" => Some(Self::Rbw),
             _ => None,
         }
     }
@@ -55,6 +59,15 @@ impl BackendType {
         {
             Self::Age
         }
+        #[cfg(all(
+            not(feature = "secret-service-backend"),
+            not(feature = "windows-credential-manager"),
+            not(feature = "age-backend"),
+            feature = "rbw-backend"
+        ))]
+        {
+            Self::Rbw
+        }
     }
 }
 
@@ -64,13 +77,17 @@ impl BackendType {
 #[command(about = "Environment variables meet secret storage")]
 #[command(long_about = None)]
 struct Cli {
-    /// Backend type: 'secret-service', 'age', or 'wincred'
+    /// Backend type: 'secret-service', 'age', 'wincred', or 'rbw'
     #[arg(long, global = true, value_name = "TYPE")]
     backend: Option<String>,
 
     /// Path to age identity file
     #[arg(long, global = true, value_name = "PATH")]
     age_identity: Option<PathBuf>,
+
+    /// Bitwarden folder for the rbw backend (default: "envchain")
+    #[arg(long, global = true, value_name = "NAME")]
+    rbw_folder: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -140,6 +157,7 @@ enum Commands {
 fn create_backend(
     backend_type: BackendType,
     #[allow(unused_variables)] age_identity: Option<PathBuf>,
+    #[allow(unused_variables)] rbw_folder: Option<String>,
 ) -> Result<Box<dyn Backend>, String> {
     match backend_type {
         #[cfg(feature = "secret-service-backend")]
@@ -152,6 +170,8 @@ fn create_backend(
         BackendType::WindowsCredentialManager => Ok(Box::new(
             backend::windows_credential_manager::WindowsCredentialManagerBackend::new()?,
         )),
+        #[cfg(feature = "rbw-backend")]
+        BackendType::Rbw => Ok(Box::new(backend::rbw::RbwBackend::new(rbw_folder)?)),
     }
 }
 
@@ -297,8 +317,8 @@ fn main() {
                 vars,
                 noecho,
             } => {
-                let (backend_type, age_identity) = parse_backend_options(&cli);
-                let mut backend = create_backend_or_exit(backend_type, age_identity);
+                let (backend_type, age_identity, rbw_folder) = parse_backend_options(&cli);
+                let mut backend = create_backend_or_exit(backend_type, age_identity, rbw_folder);
 
                 if let Err(e) = set_values(backend.as_mut(), *noecho, namespace, vars) {
                     eprintln!("{e}");
@@ -310,8 +330,8 @@ fn main() {
                 namespace,
                 show_value,
             } => {
-                let (backend_type, age_identity) = parse_backend_options(&cli);
-                let backend = create_backend_or_exit(backend_type, age_identity);
+                let (backend_type, age_identity, rbw_folder) = parse_backend_options(&cli);
+                let backend = create_backend_or_exit(backend_type, age_identity, rbw_folder);
 
                 let res = if let Some(ns) = namespace {
                     list_values(backend.as_ref(), ns, *show_value)
@@ -326,8 +346,8 @@ fn main() {
                 return;
             }
             Commands::Unset { namespace, vars } => {
-                let (backend_type, age_identity) = parse_backend_options(&cli);
-                let mut backend = create_backend_or_exit(backend_type, age_identity);
+                let (backend_type, age_identity, rbw_folder) = parse_backend_options(&cli);
+                let mut backend = create_backend_or_exit(backend_type, age_identity, rbw_folder);
 
                 if let Err(e) = unset_values(backend.as_mut(), namespace, vars) {
                     eprintln!("{e}");
@@ -340,8 +360,8 @@ fn main() {
 
     // Default exec mode: envchain NAMESPACE COMMAND [ARGS...]
     if let (Some(namespace), Some(command)) = (&cli.namespace, &cli.exec_command) {
-        let (backend_type, age_identity) = parse_backend_options(&cli);
-        let backend = create_backend_or_exit(backend_type, age_identity);
+        let (backend_type, age_identity, rbw_folder) = parse_backend_options(&cli);
+        let backend = create_backend_or_exit(backend_type, age_identity, rbw_folder);
 
         if let Err(e) = exec_with(backend, namespace, command, &cli.exec_args) {
             eprintln!("{e}");
@@ -355,21 +375,22 @@ fn main() {
     }
 }
 
-fn parse_backend_options(cli: &Cli) -> (BackendType, Option<PathBuf>) {
+fn parse_backend_options(cli: &Cli) -> (BackendType, Option<PathBuf>, Option<String>) {
     let backend_env = env::var("ENVCHAIN_BACKEND").ok();
     let backend_str = cli.backend.as_deref().or_else(|| backend_env.as_deref());
     let backend_type = backend_str
         .and_then(BackendType::from_str)
         .unwrap_or_else(BackendType::default);
 
-    (backend_type, cli.age_identity.clone())
+    (backend_type, cli.age_identity.clone(), cli.rbw_folder.clone())
 }
 
 fn create_backend_or_exit(
     backend_type: BackendType,
     age_identity: Option<PathBuf>,
+    rbw_folder: Option<String>,
 ) -> Box<dyn Backend> {
-    match create_backend(backend_type, age_identity) {
+    match create_backend(backend_type, age_identity, rbw_folder) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("{e}");

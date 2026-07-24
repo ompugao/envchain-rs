@@ -27,3 +27,6 @@ pub mod age;
 
 #[cfg(feature = "windows-credential-manager")]
 pub mod windows_credential_manager;
+
+#[cfg(feature = "rbw-backend")]
+pub mod rbw;

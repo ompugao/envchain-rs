@@ -8,10 +8,11 @@ name = "envchain"
 path = "src/main.rs"
 
 [features]
-default = ["secret-service-backend", "age-backend"]
+default = ["secret-service-backend", "age-backend", "rbw-backend"]
 secret-service-backend = ["dep:secret-service", "dep:async-io"]
 age-backend = ["dep:age", "dep:tempfile"]
 windows-credential-manager = ["dep:keyring-core", "dep:windows-native-keyring-store", "dep:regex"]
+rbw-backend = []
 
 [dependencies]
 secret-service = { version = "3", features = ["rt-async-io-crypto-rust"], optional = true }
