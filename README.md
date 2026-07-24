@@ -1,6 +1,6 @@
 # envchain-rs
 
-A Rust port of [sorah/envchain](https://github.com/sorah/envchain) — set environment variables with D-Bus secret service (Linux), age-encrypted files, or Windows Credential Manager.
+A Rust port of [sorah/envchain](https://github.com/sorah/envchain) — set environment variables with D-Bus secret service (Linux), age-encrypted files, Bitwarden (via the `rbw` CLI), or Windows Credential Manager.
 
 ## What?
 
@@ -14,6 +14,7 @@ This Rust implementation supports:
 - **Linux**: D-Bus Secret Service (gnome-keyring, KeePassXC, etc.) - default
 - **Windows/WSL2**: Windows Credential Manager
 - **Cross-platform**: Age encryption - portable, works without platform-specific backends
+- **Bitwarden**: Stored via the [`rbw`](https://github.com/doy/rbw) CLI
 
 > For macOS Keychain support, use the original [envchain](https://github.com/sorah/envchain).
 
@@ -34,6 +35,11 @@ This Rust implementation supports:
 - Native Windows credential storage
 - Works on both Windows and WSL2
 - No additional setup required on Windows systems
+
+### Bitwarden Backend (rbw)
+- Requires the [`rbw`](https://github.com/doy/rbw) CLI, configured and able to unlock your Bitwarden vault
+- Secrets are stored as `KEY=VALUE` lines in the notes field of one Bitwarden entry per namespace, grouped in a folder (default `envchain`)
+- Enabled by default on Linux/macOS builds
 
 ## Installation
 
@@ -57,6 +63,9 @@ cargo build --release --no-default-features --features secret-service-backend
 
 # Build with Windows Credential Manager backend (Windows/WSL2 only)
 cargo build --release --no-default-features --features windows-credential-manager
+
+# Build with only the rbw (Bitwarden) backend
+cargo build --release --no-default-features --features rbw-backend
 ```
 
 ## Usage
@@ -164,6 +173,7 @@ Select the storage backend:
 - `secret-service` (default on Linux) - D-Bus Secret Service
 - `age` - Age-encrypted file storage
 - `wincred` - Windows Credential Manager (Windows/WSL2)
+- `rbw` - Bitwarden via the `rbw` CLI
 
 ```bash
 # Use age backend
@@ -174,6 +184,9 @@ envchain --backend secret-service set aws AWS_ACCESS_KEY_ID
 
 # Use Windows Credential Manager (on Windows/WSL2)
 envchain --backend wincred set aws AWS_ACCESS_KEY_ID
+
+# Use Bitwarden via rbw
+envchain --backend rbw set aws AWS_ACCESS_KEY_ID
 ```
 
 #### `--age-identity <path>`
@@ -184,12 +197,21 @@ Specify the age identity file (SSH private key or age identity):
 envchain --backend age --age-identity ~/.ssh/id_ed25519 set aws AWS_ACCESS_KEY_ID
 ```
 
+#### `--rbw-folder <name>`
+
+Bitwarden folder for the rbw backend (default: `envchain`):
+
+```bash
+envchain --backend rbw --rbw-folder work set aws AWS_ACCESS_KEY_ID
+```
+
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `ENVCHAIN_BACKEND` | Default backend (`secret-service`, `age`, or `wincred`) |
+| `ENVCHAIN_BACKEND` | Default backend (`secret-service`, `age`, `wincred`, or `rbw`) |
 | `ENVCHAIN_AGE_IDENTITY` | Path to age identity file for age backend |
+| `ENVCHAIN_RBW_FOLDER` | Bitwarden folder for the rbw backend (default: `envchain`) |
 
 ## Shell Completion
 
@@ -283,9 +305,42 @@ envchain aws aws s3 ls
 
 Credentials are stored with target names like `envchain:aws:AWS_ACCESS_KEY_ID` and can be viewed in Windows Credential Manager (Control Panel → Credential Manager → Windows Credentials).
 
+## Bitwarden Backend (rbw)
+
+The rbw backend stores secrets in your Bitwarden vault via the [`rbw`](https://github.com/doy/rbw) CLI. Each namespace maps to one Bitwarden entry whose notes field holds the `KEY=VALUE` lines; entries are grouped in a folder (default `envchain`, overridable via `ENVCHAIN_RBW_FOLDER` or `--rbw-folder`).
+
+### Requirements
+
+- `rbw` installed and configured (`rbw config set email you@example.com`, `rbw login`)
+- A vault that `rbw` can unlock (pinentry is invoked on first use if locked)
+
+### Usage
+
+```bash
+# Store secrets (creates a Bitwarden entry named `aws` in the `envchain` folder)
+envchain --backend rbw set aws AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+
+# Read them back
+envchain --backend rbw list --show-value aws
+
+# Inject into a command
+envchain --backend rbw aws aws s3 ls
+
+# Remove a variable (the entry is deleted once its last key is removed)
+envchain --backend rbw unset aws AWS_ACCESS_KEY_ID
+```
+
+Use a different folder:
+
+```bash
+export ENVCHAIN_RBW_FOLDER=work
+# or
+envchain --backend rbw --rbw-folder work list
+```
+
 ## Differences from original envchain
 
-- **Cross-platform backends**: Supports Linux (D-Bus Secret Service), Windows/WSL2 (Credential Manager), and portable age encryption
+- **Cross-platform backends**: Supports Linux (D-Bus Secret Service), Windows/WSL2 (Credential Manager), portable age encryption, and Bitwarden (via `rbw`)
 - **Command-based interface**: Cleaner subcommand structure (`set`, `list`, `unset`, `get-completions`)
 - **Shell completions**: Built-in completion generation for bash, fish, and zsh
 - **Additional features**:
@@ -294,6 +349,7 @@ Credentials are stored with target names like `envchain:aws:AWS_ACCESS_KEY_ID` a
   - `--backend` to select storage backend
   - Age backend for portable, platform-independent operation
   - Windows Credential Manager for native Windows/WSL2 support
+  - Bitwarden backend via the `rbw` CLI
 
 ## Credits
 
